@@ -202,7 +202,7 @@ df["Ast+Reb"] = df["AST"] + df["REB"]
 df["Stl+Blk"] = df["STL"] + df["BLK"]
 df["PRA"] = df["PTS"] + df["REB"] + df["AST"]
 
-stats = ['PTS', 'REB', 'Pts+Reb', 'AST', 'STL', 'BLK', 'TOV', 'FG3M',
+stats = ['PTS', 'REB', 'Pts+Reb', 'AST', 'STL', 'BLK', 'TOV', 'FG3M',"FG3A"
          'Pts+Ast', 'Ast+Reb', 'Stl+Blk', 'PRA']
 
 # ── Prop line selectors ─────────────────────────────────────────────────────────
@@ -458,5 +458,6 @@ with st.expander("📊 Recent Game Log + Averages", expanded=False):
 
 # ── Footer ──────────────────────────────────────────────────────────────────────
 st.markdown("<p style='text-align:center; color:#88f0ff; padding:4rem;'>ICE PROP LAB • SYSTEM ACTIVE • 2025-26</p>", unsafe_allow_html=True)
+
 
 
