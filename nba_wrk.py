@@ -200,9 +200,11 @@ df["Pts+Ast"] = df["PTS"] + df["AST"]
 df["Pts+Reb"] = df["PTS"] + df["REB"]
 df["Ast+Reb"] = df["AST"] + df["REB"]
 df["Stl+Blk"] = df["STL"] + df["BLK"]
+df["2PM"] = df["FGM"] - df["FG3M"]     # Two-point field goals made
+df["2PA"] = df["FGA"] - df["FG3A"]     # Two-point field goals attempted
 df["PRA"] = df["PTS"] + df["REB"] + df["AST"]
 
-stats = ['PTS', 'REB', 'Pts+Reb', 'AST', 'STL', 'BLK', 'TOV', 'FG3M',"FG3A",
+stats = ['PTS', 'REB', 'Pts+Reb', 'AST', 'STL', 'BLK', 'TOV', '2PM', '2PA', 'FG3M',"FG3A",'FGM', 'FGA',
          'Pts+Ast', 'Ast+Reb', 'Stl+Blk', 'PRA']
 
 # ── Prop line selectors ─────────────────────────────────────────────────────────
@@ -458,6 +460,7 @@ with st.expander("📊 Recent Game Log + Averages", expanded=False):
 
 # ── Footer ──────────────────────────────────────────────────────────────────────
 st.markdown("<p style='text-align:center; color:#88f0ff; padding:4rem;'>ICE PROP LAB • SYSTEM ACTIVE • 2025-26</p>", unsafe_allow_html=True)
+
 
 
 
