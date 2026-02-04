@@ -168,7 +168,7 @@ games_to_show = st.sidebar.selectbox(
 # Spacer
 st.sidebar.markdown("<br>", unsafe_allow_html=True)
 
-# Refresh button (now below the games selector)
+# Refresh button
 if st.sidebar.button("🔄 Refresh Data"):
     st.cache_data.clear()
     st.rerun()
@@ -177,7 +177,6 @@ if st.sidebar.button("🔄 Refresh Data"):
 # Main content starts here
 # ────────────────────────────────────────────────────────────────────────────────
 
-# Early exit if no player selected
 if selected_player == "— Choose player —":
     st.info("Select a player to begin.")
     st.stop()
@@ -270,27 +269,36 @@ if lines:
             )
 
         with col_odds:
+            # Stable key for odds dropdown
+            odds_key = f"odds_{selected_player}_{stat}_{line}"
             selected_odds = st.selectbox(
                 "Odds",
                 options=odds_options,
                 index=0,
                 format_func=lambda x: x if x else "— no odds —",
-                key=f"odds_select_{selected_player}_{stat}_{line}",
+                key=odds_key,
                 label_visibility="collapsed"
             )
 
         with col_pin:
-            if st.button("📌", key=f"save_{selected_player}_{stat}_{line}_{selected_odds}", help="Pin to My Board"):
+            # Stable key for pin button
+            pin_key = f"pin_{selected_player}_{stat}_{line}"
+
+            if st.button("📌", key=pin_key, help="Pin to My Board"):
+                # Get current odds value from session state
+                current_odds = st.session_state.get(odds_key, "")
+
                 entry = {
                     "player": selected_player,
                     "opponent": next_opp,
                     "stat": stat,
                     "line": f"{line:.1f}",
-                    "odds": selected_odds if selected_odds else "",
+                    "odds": current_odds if current_odds else "",
                     "hitrate_str": f"{hit_str}{avg_text}",
                     "timestamp": datetime.now().strftime("%m/%d %H:%M")
                 }
 
+                # Deduplication
                 exists = any(
                     e["player"] == entry["player"] and
                     e["stat"] == entry["stat"] and
@@ -305,6 +313,9 @@ if lines:
                     st.toast(f"Pinned {stat} {entry['line']}{odds_part}", icon="📌")
                 else:
                     st.toast("Already pinned", icon="ℹ️")
+
+                st.rerun()  # Immediate UI update
+
 else:
     st.info("Select prop lines to see hit rates.")
 
