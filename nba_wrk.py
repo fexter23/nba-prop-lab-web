@@ -162,7 +162,8 @@ games_to_show = st.sidebar.selectbox(
     "Recent games to show",
     [5, 10, 15, 20],
     index=2,  # default = 15
-    key="games_to_show_select"
+    key="games_to_show_select",
+    label_visibility="collapsed"
 )
 
 # Spacer
@@ -457,4 +458,5 @@ with st.expander("📊 Recent Game Log + Averages", expanded=False):
 
 # ── Footer ──────────────────────────────────────────────────────────────────────
 st.markdown("<p style='text-align:center; color:#88f0ff; padding:4rem;'>ICE PROP LAB • SYSTEM ACTIVE • 2025-26</p>", unsafe_allow_html=True)
+
 
