@@ -132,9 +132,7 @@ if selected_player != "— Choose player —" and st.session_state.next_opponent
 if next_opp != st.session_state.next_opponent:
     st.session_state.next_opponent = next_opp
 
-# Stat selector (dropdown)
-#st.sidebar.markdown("### Stat to Analyze")
-
+# Stat selector
 available_stats = [
     'PTS', 'REB', 'AST', 'STL', 'BLK', 'TOV',
     'FGM', 'FGA', 'FG3M', 'FG3A', '2PM', '2PA',
@@ -150,7 +148,7 @@ selected_stat = st.sidebar.selectbox(
     help="Select one stat to view prop lines, hit rates and recent performance"
 )
 
-# Prop line selector – in sidebar below stat
+# Prop line selector
 lines = {}
 
 if selected_stat and selected_stat != "— Select a stat —":
@@ -170,21 +168,7 @@ if selected_stat and selected_stat != "— Select a stat —":
 else:
     st.sidebar.info("Select a stat to set the prop line", icon="ℹ️")
 
-# ── Display Settings ────────────────────────────────────────────────────────────
-#st.sidebar.markdown("### Display Settings")
-games_to_show = st.sidebar.selectbox(
-    "Recent games to show",
-    [5, 10, 15, 20],
-    index=2,
-    key="games_to_show_select",
-    label_visibility="collapsed"
-)
-
-if st.sidebar.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-    st.rerun()
-
-# ── My Board Sidebar Expander ───────────────────────────────────────────────────
+# ── My Board (moved up) ─────────────────────────────────────────────────────────
 with st.sidebar.expander(f"📋 My Board ({len(st.session_state.my_board)})", expanded=len(st.session_state.my_board) > 0):
     if not st.session_state.my_board:
         st.caption("No props saved yet. Pin interesting lines with 📌")
@@ -207,6 +191,20 @@ with st.sidebar.expander(f"📋 My Board ({len(st.session_state.my_board)})", ex
         if st.button("🗑️ Clear All", type="primary", use_container_width=True):
             st.session_state.my_board = []
             st.rerun()
+
+# ── Display Settings ────────────────────────────────────────────────────────────
+games_to_show = st.sidebar.selectbox(
+    "Recent games to show",
+    [5, 10, 15, 20],
+    index=2,
+    key="games_to_show_select",
+    label_visibility="collapsed"
+)
+
+# ── Refresh button (moved to last position) ─────────────────────────────────────
+if st.sidebar.button("🔄 Refresh Data"):
+    st.cache_data.clear()
+    st.rerun()
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Main content starts here
