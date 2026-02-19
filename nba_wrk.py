@@ -178,9 +178,8 @@ with st.sidebar.expander(f"📋 My Board ({len(st.session_state.my_board)})", ex
             with col1:
                 odds_display = f"   {item['odds']}" if item.get('odds') else ""
                 st.markdown(
-                    f"<strong>{item['player']}</strong> vs {item['opponent']}<br>"
-                    f"<small>{item['stat']} {item['line']}{odds_display}  {item['hitrate_str']}</small><br>"
-                    f"<small style='color:#88ccff'>{item['timestamp']}</small>",
+                    f"<strong>{item['player']}</strong><br>"
+                    f"<small>{item['stat']} {item['line']}{odds_display}  {item['hitrate_str']}</small><br>",                    
                     unsafe_allow_html=True
                 )
             with col2:
@@ -466,3 +465,4 @@ with st.expander("📊 Recent Game Log + Averages", expanded=False):
 
 # ── Footer ──────────────────────────────────────────────────────────────────────
 st.markdown("<p style='text-align:center; color:#88f0ff; padding:4rem;'>ICE PROP LAB • SYSTEM ACTIVE • 2025-26</p>", unsafe_allow_html=True)
+
