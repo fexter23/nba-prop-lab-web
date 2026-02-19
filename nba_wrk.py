@@ -61,16 +61,21 @@ def get_player_id(name):
     return None
 
 @st.cache_data(ttl=7200)
-def get_active_players():
+def get_active_players_with_teams():
     for season in [CURRENT_SEASON, PREVIOUS_SEASON]:
         try:
             df = leaguedashplayerstats.LeagueDashPlayerStats(
-                season=season, season_type_all_star="Regular Season").get_data_frames()[0]
+                season=season, 
+                season_type_all_star="Regular Season"
+            ).get_data_frames()[0]
+            
             if not df.empty and len(df) > 80:
-                return set(df.PLAYER_ID)
+                df = df[df['TEAM_ABBREVIATION'].notna() & (df['TEAM_ABBREVIATION'] != '')]
+                player_team_map = dict(zip(df['PLAYER_ID'].astype(str), df['TEAM_ABBREVIATION']))
+                return player_team_map
         except:
             continue
-    return set()
+    return {}
 
 @st.cache_data(ttl=300)
 def get_player_games(pid):
@@ -89,66 +94,68 @@ def get_player_games(pid):
             continue
     return pd.DataFrame()
 
-# ── Load active players ─────────────────────────────────────────────────────────
-active_ids = get_active_players()
-player_list = sorted([p["full_name"] for p in players.get_players() if p["id"] in active_ids])
+# ── Load active players with teams ──────────────────────────────────────────────
+player_team_map = get_active_players_with_teams()
+
+# Build formatted player list with team abbreviation
+player_options = []
+all_players = players.get_players()
+
+for p in all_players:
+    pid_str = str(p["id"])
+    if pid_str in player_team_map:
+        team = player_team_map[pid_str]
+        display_name = f"{p['full_name']} • {team}"
+        player_options.append((display_name, p['full_name']))  # (display, actual value)
+
+player_options.sort(key=lambda x: x[1].lower())
+
+player_list_display = [opt[0] for opt in player_options]
+player_list_clean = [opt[1] for opt in player_options]  # parallel list for mapping back
 
 common_teams = sorted(['ATL','BOS','BKN','CHA','CHI','CLE','DAL','DEN','DET','GSW','HOU','IND','LAC','LAL','MEM','MIA','MIL','MIN','NOP','NYK','OKC','ORL','PHI','PHX','POR','SAC','SAS','TOR','UTA','WAS','UNKNOWN'])
 
 if 'next_opponent' not in st.session_state:
     st.session_state.next_opponent = "BOS"
 
-# ── Sidebar ─────────────────────────────────────────────────────────────────────
-
-# Player & Opponent selectors side-by-side
-sidebar_cols = st.sidebar.columns([3, 2])
-
-with sidebar_cols[0]:
-    selected_player = st.selectbox(
-        "Player",
-        ["— Choose player —"] + player_list,
-        key="sidebar_player_select",
-        label_visibility="collapsed"
-    )
-
-with sidebar_cols[1]:
-    next_opp = st.selectbox(
-        "Opponent",
-        common_teams,
-        index=common_teams.index(st.session_state.next_opponent) if st.session_state.next_opponent in common_teams else 0,
-        key="sidebar_opp_select",
-        label_visibility="collapsed"
-    )
-
-# Auto-set opponent for famous players (optional)
-if selected_player != "— Choose player —" and st.session_state.next_opponent == "BOS":
-    if "James" in selected_player:
-        st.session_state.next_opponent = "LAL"
-    elif "Dončić" in selected_player:
-        st.session_state.next_opponent = "DAL"
-    elif "Jokić" in selected_player:
-        st.session_state.next_opponent = "DEN"
-
-if next_opp != st.session_state.next_opponent:
-    st.session_state.next_opponent = next_opp
-
-# Stat selector
 available_stats = [
     'PTS', 'REB', 'AST', 'STL', 'BLK', 'TOV',
     'FGM', 'FGA', 'FG3M', 'FG3A', '2PM', '2PA',
     'Pts+Reb', 'Pts+Ast', 'Ast+Reb', 'Stl+Blk', 'PRA'
 ]
 
-selected_stat = st.sidebar.selectbox(
-    "Choose stat",
-    options=["— Select a stat —"] + available_stats,
-    index=0,
-    key="selected_stat_dropdown",
-    label_visibility="collapsed",
-    help="Select one stat to view prop lines, hit rates and recent performance"
-)
+# ── Sidebar ─────────────────────────────────────────────────────────────────────
 
-# Prop line selector
+# Top row: Player + Stat
+top_row = st.sidebar.columns([3, 2])
+
+with top_row[0]:
+    selected_display = st.selectbox(
+        "Player",
+        ["— Choose player —"] + player_list_display,
+        key="sidebar_player_select",
+        label_visibility="collapsed"
+    )
+
+with top_row[1]:
+    selected_stat = st.selectbox(
+        "Choose stat",
+        options=["— Select a stat —"] + available_stats,
+        index=0,
+        key="selected_stat_dropdown",
+        label_visibility="collapsed",
+        help="Select one stat to view prop lines, hit rates and recent performance"
+    )
+
+# Map displayed name back to actual player name
+selected_player = "— Choose player —"
+if selected_display != "— Choose player —":
+    for disp, clean in zip(player_list_display, player_list_clean):
+        if disp == selected_display:
+            selected_player = clean
+            break
+
+# Prop line selector — right under player + stat
 lines = {}
 
 if selected_stat and selected_stat != "— Select a stat —":
@@ -168,7 +175,7 @@ if selected_stat and selected_stat != "— Select a stat —":
 else:
     st.sidebar.info("Select a stat to set the prop line", icon="ℹ️")
 
-# ── My Board (moved up) ─────────────────────────────────────────────────────────
+# My Board
 with st.sidebar.expander(f"📋 My Board ({len(st.session_state.my_board)})", expanded=len(st.session_state.my_board) > 0):
     if not st.session_state.my_board:
         st.caption("No props saved yet. Pin interesting lines with 📌")
@@ -177,9 +184,12 @@ with st.sidebar.expander(f"📋 My Board ({len(st.session_state.my_board)})", ex
             col1, col2 = st.columns([6, 1])
             with col1:
                 odds_display = f"   {item['odds']}" if item.get('odds') else ""
+                team_abbr = item.get('team', '???')
+                player_display = f"{item['player']} • {team_abbr}"
+                
                 st.markdown(
-                    f"<strong>{item['player']}</strong><br>"
-                    f"<small>{item['stat']} {item['line']}{odds_display}  {item['hitrate_str']}</small><br>",                    
+                    f"<strong>{player_display}</strong><br>"
+                    f"<small>{item['stat']} {item['line']}{odds_display}  {item['hitrate_str']}</small><br>",
                     unsafe_allow_html=True
                 )
             with col2:
@@ -191,16 +201,40 @@ with st.sidebar.expander(f"📋 My Board ({len(st.session_state.my_board)})", ex
             st.session_state.my_board = []
             st.rerun()
 
-# ── Display Settings ────────────────────────────────────────────────────────────
-games_to_show = st.sidebar.selectbox(
-    "Recent games to show",
-    [5, 10, 15, 20],
-    index=2,
-    key="games_to_show_select",
-    label_visibility="collapsed"
-)
+# Opponent + Games to show
+third_row = st.sidebar.columns([2, 3])
 
-# ── Refresh button (moved to last position) ─────────────────────────────────────
+with third_row[0]:
+    next_opp = st.selectbox(
+        "Opponent",
+        common_teams,
+        index=common_teams.index(st.session_state.next_opponent) if st.session_state.next_opponent in common_teams else 0,
+        key="sidebar_opp_select",
+        label_visibility="collapsed"
+    )
+
+with third_row[1]:
+    games_to_show = st.selectbox(
+        "Recent games to show",
+        [5, 10, 15, 20],
+        index=2,
+        key="games_to_show_select",
+        label_visibility="collapsed"
+    )
+
+# Auto-set opponent for famous players (optional)
+if selected_player != "— Choose player —" and st.session_state.next_opponent == "BOS":
+    if "James" in selected_player:
+        st.session_state.next_opponent = "LAL"
+    elif "Dončić" in selected_player:
+        st.session_state.next_opponent = "DAL"
+    elif "Jokić" in selected_player:
+        st.session_state.next_opponent = "DEN"
+
+if next_opp != st.session_state.next_opponent:
+    st.session_state.next_opponent = next_opp
+
+# Refresh button
 if st.sidebar.button("🔄 Refresh Data"):
     st.cache_data.clear()
     st.rerun()
@@ -302,8 +336,12 @@ if lines:
             if st.button("📌", key=pin_key, help="Pin to My Board"):
                 current_odds = st.session_state.get(odds_key, "")
 
+                pid_str = str(pid)
+                team = player_team_map.get(pid_str, "???")
+
                 entry = {
                     "player": selected_player,
+                    "team": team,
                     "opponent": next_opp,
                     "stat": stat,
                     "line": f"{line:.1f}",
@@ -465,4 +503,3 @@ with st.expander("📊 Recent Game Log + Averages", expanded=False):
 
 # ── Footer ──────────────────────────────────────────────────────────────────────
 st.markdown("<p style='text-align:center; color:#88f0ff; padding:4rem;'>ICE PROP LAB • SYSTEM ACTIVE • 2025-26</p>", unsafe_allow_html=True)
-
