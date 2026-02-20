@@ -94,6 +94,23 @@ def get_player_games(pid):
             continue
     return pd.DataFrame()
 
+def get_hitrate_edge(hitrate_str: str) -> float:
+    """
+    Strictly parses the AVG part: "AVG: O 68% / U 32%"
+    Returns how far the stronger side is from 50% (0–50)
+    """
+    if not hitrate_str or "AVG:" not in hitrate_str:
+        return 0.0
+    
+    try:
+        avg_part = hitrate_str.split("AVG:")[1]
+        o_str = avg_part.split("O ")[1].split("%")[0].strip()
+        o_pct = float(o_str)
+        strongest = max(o_pct, 100 - o_pct)
+        return strongest - 50
+    except:
+        return 0.0
+
 # ── Load active players with teams ──────────────────────────────────────────────
 player_team_map = get_active_players_with_teams()
 
@@ -150,11 +167,10 @@ with top_row[0]:
     )
 
 with top_row[1]:
-    # PTS is now default (index 0 in available_stats)
     selected_stat = st.selectbox(
         "Choose stat",
         options=["— Select a stat —"] + available_stats,
-        index=1,  # index 1 = PTS (after the placeholder)
+        index=1,  # PTS default
         key="selected_stat_dropdown",
         label_visibility="collapsed",
         help="Select one stat to view prop lines, hit rates and recent performance"
@@ -191,9 +207,13 @@ with st.sidebar.expander(f"📋 My Board ({len(st.session_state.my_board)})", ex
     if not st.session_state.my_board:
         st.caption("No props saved yet. Pin interesting lines with 📌")
     else:
+        # ── NEW SORT: strongest edge first, then newest ────────────────────────
         board_items = sorted(
             st.session_state.my_board[:],
-            key=lambda x: x.get("timestamp", ""),  # fallback sort by time if needed
+            key=lambda x: (
+                get_hitrate_edge(x.get("hitrate_str", "")),
+                x.get("timestamp", "")
+            ),
             reverse=True
         )
 
@@ -565,5 +585,3 @@ with st.expander("📊 Recent Game Log + Averages", expanded=False):
 
 # ── Footer ──────────────────────────────────────────────────────────────────────
 st.markdown("<p style='text-align:center; color:#88f0ff; padding:4rem;'>ICE PROP LAB • SYSTEM ACTIVE • 2025-26</p>", unsafe_allow_html=True)
-
-
