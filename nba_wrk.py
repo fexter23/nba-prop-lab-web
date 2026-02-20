@@ -106,12 +106,12 @@ for p in all_players:
     if pid_str in player_team_map:
         team = player_team_map[pid_str]
         display_name = f"{p['full_name']} • {team}"
-        player_options.append((display_name, p['full_name']))  # (display, actual value)
+        player_options.append((display_name, p['full_name']))
 
 player_options.sort(key=lambda x: x[1].lower())
 
 player_list_display = [opt[0] for opt in player_options]
-player_list_clean = [opt[1] for opt in player_options]  # parallel list for mapping back
+player_list_clean = [opt[1] for opt in player_options]
 
 common_teams = sorted(['ATL','BOS','BKN','CHA','CHI','CLE','DAL','DEN','DET','GSW','HOU','IND','LAC','LAL','MEM','MIA','MIL','MIN','NOP','NYK','OKC','ORL','PHI','PHX','POR','SAC','SAS','TOR','UTA','WAS','UNKNOWN'])
 
@@ -124,9 +124,21 @@ available_stats = [
     'Pts+Reb', 'Pts+Ast', 'Ast+Reb', 'Stl+Blk', 'PRA'
 ]
 
+# ── Expanded odds options ───────────────────────────────────────────────────────
+odds_options = [
+    "",  # no odds
+    "-101", "-102", "-105", "-108", "-110", "-112", "-115", "-118", "-120",
+    "-122", "-125", "-130", "-135", "-140", "-145", "-150", "-155", "-160",
+    "-165", "-170", "-175", "-180", "-185", "-190", "-195", "-200", "-210",
+    "-220", "-230", "-240", "-250", "-275", "-300",
+    "+100", "+102", "+105", "+108", "+110", "+112", "+115", "+118", "+120",
+    "+125", "+130", "+135", "+140", "+145", "+150", "+155", "+160", "+165",
+    "+170", "+175", "+180", "+185", "+190", "+195", "+200", "+210", "+220",
+    "+230", "+240", "+250", "+275", "+300", "+350", "+400", "+450", "+500",
+]
+
 # ── Sidebar ─────────────────────────────────────────────────────────────────────
 
-# Top row: Player + Stat
 top_row = st.sidebar.columns([3, 2])
 
 with top_row[0]:
@@ -138,16 +150,16 @@ with top_row[0]:
     )
 
 with top_row[1]:
+    # PTS is now default (index 0 in available_stats)
     selected_stat = st.selectbox(
         "Choose stat",
         options=["— Select a stat —"] + available_stats,
-        index=0,
+        index=1,  # index 1 = PTS (after the placeholder)
         key="selected_stat_dropdown",
         label_visibility="collapsed",
         help="Select one stat to view prop lines, hit rates and recent performance"
     )
 
-# Map displayed name back to actual player name
 selected_player = "— Choose player —"
 if selected_display != "— Choose player —":
     for disp, clean in zip(player_list_display, player_list_clean):
@@ -155,7 +167,6 @@ if selected_display != "— Choose player —":
             selected_player = clean
             break
 
-# Prop line selector — right under player + stat
 lines = {}
 
 if selected_stat and selected_stat != "— Select a stat —":
@@ -175,12 +186,20 @@ if selected_stat and selected_stat != "— Select a stat —":
 else:
     st.sidebar.info("Select a stat to set the prop line", icon="ℹ️")
 
-# My Board
+# ── My Board ────────────────────────────────────────────────────────────────────
 with st.sidebar.expander(f"📋 My Board ({len(st.session_state.my_board)})", expanded=len(st.session_state.my_board) > 0):
     if not st.session_state.my_board:
         st.caption("No props saved yet. Pin interesting lines with 📌")
     else:
-        for i, item in enumerate(st.session_state.my_board[:]):
+        board_items = sorted(
+            st.session_state.my_board[:],
+            key=lambda x: x.get("timestamp", ""),  # fallback sort by time if needed
+            reverse=True
+        )
+
+        for item in board_items:
+            original_index = st.session_state.my_board.index(item)
+            
             col1, col2 = st.columns([6, 1])
             with col1:
                 odds_display = f"   {item['odds']}" if item.get('odds') else ""
@@ -193,8 +212,8 @@ with st.sidebar.expander(f"📋 My Board ({len(st.session_state.my_board)})", ex
                     unsafe_allow_html=True
                 )
             with col2:
-                if st.button("×", key=f"remove_board_{i}", help="Remove from board"):
-                    st.session_state.my_board.pop(i)
+                if st.button("×", key=f"remove_board_{original_index}", help="Remove from board"):
+                    st.session_state.my_board.pop(original_index)
                     st.rerun()
 
         if st.button("🗑️ Clear All", type="primary", use_container_width=True):
@@ -222,7 +241,7 @@ with third_row[1]:
         label_visibility="collapsed"
     )
 
-# Auto-set opponent for famous players (optional)
+# Auto-set opponent
 if selected_player != "— Choose player —" and st.session_state.next_opponent == "BOS":
     if "James" in selected_player:
         st.session_state.next_opponent = "LAL"
@@ -234,13 +253,12 @@ if selected_player != "— Choose player —" and st.session_state.next_opponent
 if next_opp != st.session_state.next_opponent:
     st.session_state.next_opponent = next_opp
 
-# Refresh button
 if st.sidebar.button("🔄 Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Main content starts here
+# Main content
 # ────────────────────────────────────────────────────────────────────────────────
 
 if selected_player == "— Choose player —":
@@ -272,13 +290,6 @@ df["PRA"] = df["PTS"] + df["REB"] + df["AST"]
 # ── 1. HIT RATE SUMMARY ─────────────────────────────────────────────────────────
 if lines:
     pdata = df.sort_values("GAME_DATE_DT", ascending=False)
-
-    odds_options = [
-        "", "-110", "-105", "-115", "-120", "-125", "-130", "-135", "-140", "-145", "-150",
-        "-155", "-160", "-165", "-170", "-175", "-180", "-185", "-190", "-195", "-200",
-        "+100", "+105", "+110", "+115", "+120", "+125", "+130", "+135", "+140", "+145",
-        "+150", "+155", "+160", "+165", "+200"
-    ]
 
     for stat, line in lines.items():
         over_list = []
@@ -321,7 +332,7 @@ if lines:
 
         with col_odds:
             odds_key = f"odds_{selected_player}_{stat}_{line}"
-            selected_odds = st.selectbox(
+            st.selectbox(
                 "Odds",
                 options=odds_options,
                 index=0,
@@ -338,6 +349,18 @@ if lines:
 
                 pid_str = str(pid)
                 team = player_team_map.get(pid_str, "???")
+
+                try:
+                    avg_o_str = avg_text.split("O ")[1].split("%")[0].strip()
+                    avg_o = float(avg_o_str)
+                except:
+                    avg_o = 0.0
+
+                try:
+                    avg_u_str = avg_text.split("U ")[1].split("%")[0].strip()
+                    avg_u = float(avg_u_str)
+                except:
+                    avg_u = 0.0
 
                 entry = {
                     "player": selected_player,
@@ -398,6 +421,34 @@ if lines:
         st.plotly_chart(fig, use_container_width=True)
 
 # ── 3. RECENT MINUTES PLAYED ────────────────────────────────────────────────────
+if len(recent) >= 3:
+    x_num = np.arange(len(recent))
+    y = recent["MIN"].values
+    slope, intercept = np.polyfit(x_num, y, 1)
+    
+    recent_min_avg = recent.head(5)["MIN"].mean() if len(recent) >= 5 else recent["MIN"].mean()
+    projected_next = recent_min_avg + slope * 1
+    
+    concern_level = ""
+    if projected_next < 25:
+        concern_level = "🔴 **High concern** — projected <25 min"
+    elif projected_next < 28:
+        concern_level = "🟠 **Moderate concern** — projected <28 min"
+    elif projected_next < 32:
+        concern_level = "🟡 **Some concern** — projected <32 min"
+    else:
+        concern_level = "🟢 **Solid projection**"
+
+    trend_arrow = "↑" if slope > 0.3 else "↓" if slope < -0.3 else "→"
+    trend_text = f"Trend: {trend_arrow} {slope:.1f} min/game"
+
+    st.markdown(
+        f"**Projected next-game minutes**: ≈ **{projected_next:.1f}** ({trend_text}) — **Status**: {concern_level}",
+        unsafe_allow_html=True
+    )
+else:
+    st.caption("Not enough games to project minutes trend.")
+
 fig_min = go.Figure()
 
 colors = []
@@ -433,13 +484,24 @@ fig_min.add_hline(
     annotation_font_color="#00e0ff"
 )
 
+if len(recent) >= 3:
+    trend_y = slope * x_num + intercept
+    fig_min.add_trace(go.Scatter(
+        x=recent["GAME_DATE"],
+        y=trend_y,
+        mode='lines',
+        line=dict(color='#00e0ff', width=2, dash='dash'),
+        name='Trend',
+        hoverinfo='skip'
+    ))
+
 fig_min.update_layout(
     height=340,
     showlegend=False,
     plot_bgcolor="rgba(0,0,0,0)",
     paper_bgcolor="rgba(0,0,0,0)",
     font_color="#00e0ff",
-    margin=dict(t=40, b=40, l=30, r=30),
+    margin=dict(t=20, b=40, l=30, r=30),
     yaxis_title="Minutes",
     yaxis_range=[0, max(45, recent["MIN"].max() + 5)]
 )
