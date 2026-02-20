@@ -1,4 +1,5 @@
 streamlit
 nba_api
 plotly
+pyarrow
 pandas
