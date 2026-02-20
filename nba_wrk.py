@@ -192,10 +192,13 @@ with st.sidebar.expander(f"📋 My Board ({len(st.session_state.my_board)})", ex
         st.caption("No props saved yet. Pin interesting lines with 📌")
     else:
         board_items = sorted(
-            st.session_state.my_board[:],
-            key=lambda x: x.get("timestamp", ""),  # fallback sort by time if needed
-            reverse=True
-        )
+    st.session_state.my_board[:],
+    key=lambda x: (
+        get_hitrate_edge(x.get("hitrate_str", "")),
+        x.get("timestamp", "")   # optional: stable sort by time when edges are equal
+    ),
+    reverse=True   # highest edge first
+)
 
         for item in board_items:
             original_index = st.session_state.my_board.index(item)
@@ -565,3 +568,4 @@ with st.expander("📊 Recent Game Log + Averages", expanded=False):
 
 # ── Footer ──────────────────────────────────────────────────────────────────────
 st.markdown("<p style='text-align:center; color:#88f0ff; padding:4rem;'>ICE PROP LAB • SYSTEM ACTIVE • 2025-26</p>", unsafe_allow_html=True)
+
