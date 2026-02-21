@@ -32,8 +32,14 @@ jobs:
         run: |
           git config user.name "GitHub Action Bot"
           git config user.email "actions@github.com"
+          
+          git fetch origin
+          git merge origin/main --no-edit || { echo "Merge conflict - manual resolution needed"; exit 1; }
+          
           git add data/
-          git diff --staged --quiet || git commit -m "Daily NBA data refresh $(date +'%Y-%m-%d')"
-          git push
+          git diff --staged --quiet && { echo "No changes to commit"; exit 0; } || true
+          
+          git commit -m "Daily NBA data refresh $(date +'%Y-%m-%d')" || { echo "Nothing to commit"; exit 0; }
+          git push origin HEAD:main
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # automatic — no need to create
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
