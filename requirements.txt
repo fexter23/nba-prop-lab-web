@@ -3,3 +3,4 @@ nba_api
 plotly
 pyarrow
 pandas
+openpyxl
