@@ -1,12 +1,11 @@
 # nba_wrk.py – ICE PROP LAB • Single Player + Persistent Opponent + DvP Panel
 
 import streamlit as st
-from nba_api.stats.static import players
-from nba_api.stats.endpoints import leaguedashplayerstats, PlayerGameLog
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime
+from nba_api.stats.endpoints import PlayerGameLog   # only used for game logs now
 
 st.set_page_config(page_title="ICE PROP LAB", layout="wide", initial_sidebar_state="expanded")
 
@@ -27,6 +26,38 @@ def get_current_season():
 CURRENT_SEASON = get_current_season()
 current_year = int(CURRENT_SEASON.split('-')[0])
 PREVIOUS_SEASON = f"{current_year - 1}-{str(current_year)[-2:]}"
+
+# ── Load pre-downloaded static data ─────────────────────────────────────────────
+@st.cache_data(ttl="12h")
+def load_nba_static():
+    try:
+        df_players = pd.read_parquet("data/players.parquet")
+        df_teams   = pd.read_parquet("data/active_player_teams.parquet")
+        
+        player_team_map = dict(zip(
+            df_teams['PLAYER_ID'].astype(str),
+            df_teams['TEAM_ABBR']
+        ))
+        
+        player_options = []
+        for _, row in df_players.iterrows():
+            pid_str = str(row['id'])
+            if pid_str in player_team_map:
+                team = player_team_map[pid_str]
+                display_name = f"{row['full_name']} • {team}"
+                player_options.append((display_name, row['full_name']))
+        
+        player_options.sort(key=lambda x: x[1].lower())
+        
+        return player_options, player_team_map
+    except Exception as e:
+        st.error(f"Could not load static NBA data: {e}")
+        st.stop()
+
+player_options, player_team_map = load_nba_static()
+
+player_list_display = [opt[0] for opt in player_options]
+player_list_clean   = [opt[1] for opt in player_options]
 
 # ── Styling ─────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -61,24 +92,10 @@ def dropdown_values():
     return [None] + [round(x, 1) for x in np.arange(0.5, 60.6, 1.0)]
 
 def get_player_id(name):
-    for p in players.get_players():
-        if p['full_name'].lower() == name.lower():
-            return p['id']
+    for _, row in pd.read_parquet("data/players.parquet").iterrows():
+        if row['full_name'].lower() == name.lower():
+            return row['id']
     return None
-
-@st.cache_data(ttl=7200)
-def get_active_players_with_teams():
-    for season in [CURRENT_SEASON, PREVIOUS_SEASON]:
-        try:
-            df = leaguedashplayerstats.LeagueDashPlayerStats(
-                season=season, season_type_all_star="Regular Season"
-            ).get_data_frames()[0]
-            if not df.empty and len(df) > 80:
-                df = df[df['TEAM_ABBREVIATION'].notna() & (df['TEAM_ABBREVIATION'] != '')]
-                return dict(zip(df['PLAYER_ID'].astype(str), df['TEAM_ABBREVIATION']))
-        except:
-            continue
-    return {}
 
 @st.cache_data(ttl=300)
 def get_player_games(pid):
@@ -109,21 +126,6 @@ def get_hitrate_edge(hitrate_str: str) -> float:
     except:
         return 0.0
 
-# ── Load player-team map ────────────────────────────────────────────────────────
-player_team_map = get_active_players_with_teams()
-
-player_options = []
-for p in players.get_players():
-    pid_str = str(p["id"])
-    if pid_str in player_team_map:
-        team = player_team_map[pid_str]
-        display_name = f"{p['full_name']} • {team}"
-        player_options.append((display_name, p['full_name']))
-
-player_options.sort(key=lambda x: x[1].lower())
-player_list_display = [opt[0] for opt in player_options]
-player_list_clean = [opt[1] for opt in player_options]
-
 common_teams = sorted(['ATL','BOS','BKN','CHA','CHI','CLE','DAL','DEN','DET','GSW','HOU','IND','LAC','LAL','MEM','MIA','MIL','MIN','NOP','NYK','OKC','ORL','PHI','PHX','POR','SAC','SAS','TOR','UTA','WAS'])
 
 available_stats = [
@@ -137,7 +139,7 @@ odds_options = [""] + ["-110","-105","-115","-120","-125","-130"] + ["+100","+10
 
 # ── Sidebar ─────────────────────────────────────────────────────────────────────
 
-# Top row: Player + Stat + Opponent (all on one line, no labels)
+# Top row: Player + Stat + Opponent
 top_row = st.sidebar.columns([3, 2, 2])
 with top_row[0]:
     selected_display = st.selectbox(
@@ -220,7 +222,7 @@ with st.sidebar.expander(f"📋 My Board ({len(st.session_state.my_board)})", ex
 
 st.sidebar.markdown("---")
 
-# Bottom row: Recent games + Refresh (no label)
+# Bottom row: Recent games + Refresh
 bottom_row = st.sidebar.columns([2, 1])
 with bottom_row[0]:
     games_to_show = st.selectbox(
@@ -298,8 +300,6 @@ df["PRA"] = df["PTS"] + df["REB"] + df["AST"]
 left_col, right_col = st.columns([3.5, 1.5])
 
 with left_col:
-   
-
     if lines:
         pdata = df.sort_values("GAME_DATE_DT", ascending=False)
         for stat, line in lines.items():
@@ -401,10 +401,8 @@ with left_col:
                               font_color="#00e0ff", margin=dict(t=20,b=40,l=30,r=30), yaxis_title="Minutes")
         st.plotly_chart(fig_min, use_container_width=True)
 
-# ── Defensive Context (only opponent) ──────────────────────────────────────────
+# ── Defensive Context ──────────────────────────────────────────────────────────
 with right_col:
-    
-
     def get_matchup_indicator(stat, rank):
         if stat == 'TO':
             if rank <= 8:   return "🔴", "#ff4d4d", "very few forced"
