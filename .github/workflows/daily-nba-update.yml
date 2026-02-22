@@ -44,7 +44,6 @@ custom_headers = {
 for season in seasons:
     try:
         print(f"Attempting to fetch data for {season}...")
-        # Added headers parameter for better reliability
         df = leaguedashplayerstats.LeagueDashPlayerStats(
             season=season,
             season_type_all_star="Regular Season",
@@ -59,7 +58,7 @@ for season in seasons:
             break
     except Exception as e:
         print(f"Season {season} failed: {e}")
-        time.sleep(2) # Brief pause before trying the next season
+        time.sleep(2) 
 
 if team_map:
     df_teams = pd.DataFrame.from_dict(team_map, orient='index', columns=['TEAM_ABBR'])
