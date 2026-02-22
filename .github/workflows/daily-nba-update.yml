@@ -1,45 +1,73 @@
-name: Daily NBA Data Refresh
+# scripts/update_nba_data.py
+from nba_api.stats.static import players
+from nba_api.stats.endpoints import leaguedashplayerstats
+import pandas as pd
+import os
+import time
+from datetime import datetime
 
-on:
-  schedule:
-    - cron: '45 5 * * *'          # every day at 5:45 UTC (~1:45 AM EST — after most games end)
-  workflow_dispatch:              # allows manual trigger from GitHub UI
+# Use the logic from your nba_wrk.py for consistency
+def get_current_season():
+    today = datetime.today()
+    if today.month >= 10:
+        return f"{today.year}-{str(today.year + 1)[-2:]}"
+    else:
+        return f"{today.year-1}-{str(today.year)[-2:]}"
 
-jobs:
-  update-and-commit:
-    runs-on: ubuntu-latest
+CURRENT_SEASON = get_current_season()
+current_year = int(CURRENT_SEASON.split('-')[0])
+PREVIOUS_SEASON = f"{current_year - 1}-{str(current_year)[-2:]}"
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0            # needed for proper git history
+print(f"Starting NBA data update — {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}")
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+# 1. Save All Players
+all_players = players.get_players()
+df_players = pd.DataFrame(all_players)
+os.makedirs("data", exist_ok=True)
+df_players.to_parquet("data/players.parquet", index=False)
+print(f"Saved {len(df_players)} players")
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+# 2. Fetch Active Players and Teams
+team_map = {}
+seasons = [CURRENT_SEASON, PREVIOUS_SEASON] 
 
-      - name: Run data update script
-        run: python scripts/update_nba_data.py
+# Recommended headers to avoid API blocks
+custom_headers = {
+    'Host': 'stats.nba.com',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.5',
+    'Referer': 'https://stats.nba.com/',
+    'Connection': 'keep-alive'
+}
 
-      - name: Commit and push changes (if any)
-        run: |
-          git config user.name "GitHub Action Bot"
-          git config user.email "actions@github.com"
-          
-          git fetch origin
-          git merge origin/main --no-edit || { echo "Merge conflict - manual resolution needed"; exit 1; }
-          
-          git add data/
-          git diff --staged --quiet && { echo "No changes to commit"; exit 0; } || true
-          
-          git commit -m "Daily NBA data refresh $(date +'%Y-%m-%d')" || { echo "Nothing to commit"; exit 0; }
-          git push origin HEAD:main
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+for season in seasons:
+    try:
+        print(f"Attempting to fetch data for {season}...")
+        # Added headers parameter for better reliability
+        df = leaguedashplayerstats.LeagueDashPlayerStats(
+            season=season,
+            season_type_all_star="Regular Season",
+            headers=custom_headers,
+            timeout=30
+        ).get_data_frames()[0]
+        
+        if not df.empty and len(df) > 80:
+            df = df[df['TEAM_ABBREVIATION'].notna() & (df['TEAM_ABBREVIATION'] != '')]
+            team_map = dict(zip(df['PLAYER_ID'].astype(str), df['TEAM_ABBREVIATION']))
+            print(f"Successfully got {len(team_map)} active players from {season}")
+            break
+    except Exception as e:
+        print(f"Season {season} failed: {e}")
+        time.sleep(2) # Brief pause before trying the next season
+
+if team_map:
+    df_teams = pd.DataFrame.from_dict(team_map, orient='index', columns=['TEAM_ABBR'])
+    df_teams.index.name = 'PLAYER_ID'
+    df_teams.reset_index(inplace=True)
+    df_teams.to_parquet("data/active_player_teams.parquet", index=False)
+    print("Active player teams saved.")
+else:
+    print("Warning: No active team data retrieved")
+
+print("Update finished.")
