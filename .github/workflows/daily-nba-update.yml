@@ -1,56 +1,54 @@
-import os
-import time
-import pandas as pd
-from datetime import datetime
-from nba_api.stats.static import players
-from nba_api.stats.endpoints import leaguedashplayerstats
+name: Daily NBA Data Refresh
 
-# 1. Season Helper
-def get_current_season():
-    today = datetime.today()
-    if today.month >= 10:
-        return f"{today.year}-{str(today.year + 1)[-2:]}"
-    else:
-        return f"{today.year-1}-{str(today.year)[-2:]}"
+on:
+  schedule:
+    - cron: '45 5 * * *'          # every day at 5:45 UTC (~12:45 AM EST)
+  workflow_dispatch:              # allows manual trigger from GitHub UI
 
-CURRENT_SEASON = get_current_season()
-print(f"Starting NBA data update — {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}")
+permissions:
+  contents: write                 # required to allow the workflow to push commits
 
-# 2. Save Static Player List
-all_players = players.get_players()
-df_players = pd.DataFrame(all_players)
-os.makedirs("data", exist_ok=True)
-df_players.to_parquet("data/players.parquet", index=False)
-print(f"Saved {len(df_players)} players")
+jobs:
+  update-and-commit:
+    runs-on: ubuntu-latest
 
-# 3. Fetch Active Teams (League-wide)
-team_map = {}
-custom_headers = {
-    'Host': 'stats.nba.com',
-    'User-Agent': 'Mozilla/5.0',
-    'Referer': 'https://stats.nba.com/'
-}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0            # important for proper git history & merging
 
-try:
-    print(f"Fetching data for {CURRENT_SEASON}...")
-    df = leaguedashplayerstats.LeagueDashPlayerStats(
-        season=CURRENT_SEASON,
-        season_type_all_star="Regular Season",
-        headers=custom_headers,
-        timeout=30
-    ).get_data_frames()[0]
-    
-    if not df.empty:
-        df = df[df['TEAM_ABBREVIATION'].notna() & (df['TEAM_ABBREVIATION'] != '')]
-        team_map = dict(zip(df['PLAYER_ID'].astype(str), df['TEAM_ABBREVIATION']))
-        print(f"Successfully got {len(team_map)} active players")
-except Exception as e:
-    print(f"Failed to fetch: {e}")
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-if team_map:
-    df_teams = pd.DataFrame.from_dict(team_map, orient='index', columns=['TEAM_ABBR'])
-    df_teams.index.name = 'PLAYER_ID'
-    df_teams.reset_index(inplace=True)
-    df_teams.to_parquet("data/active_player_teams.parquet", index=False)
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-print("Update finished.")
+      - name: Run data update script
+        run: python scripts/update_nba_data.py
+
+      - name: Commit and push changes (if any)
+        run: |
+          git config user.name "GitHub Action Bot"
+          git config user.email "actions@github.com"
+          
+          # Bring remote changes in first to avoid non-fast-forward rejection
+          git fetch origin
+          git merge origin/main --no-edit --no-ff || { echo "Merge conflict or no changes to merge"; exit 0; }
+          
+          # Stage any changes in the data/ folder
+          git add data/
+          
+          # Only commit if there are actual changes
+          git diff --staged --quiet && { echo "No changes to commit"; exit 0; } || true
+          
+          git commit -m "Daily NBA data refresh $(date +'%Y-%m-%d')" || { echo "Nothing to commit"; exit 0; }
+          
+          # Push (should now succeed after merge)
+          git push origin HEAD:main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
