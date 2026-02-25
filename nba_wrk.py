@@ -1,11 +1,13 @@
 # nba_wrk.py – ICE PROP LAB • Single Player + Persistent Opponent + DvP Panel
 
 import streamlit as st
+from nba_api.stats.static import players
+from nba_api.stats.static import teams as static_teams
+from nba_api.stats.endpoints import leaguedashplayerstats, PlayerGameLog, scoreboardv2
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from datetime import datetime
-from nba_api.stats.endpoints import PlayerGameLog   # only used for game logs now
+from datetime import datetime, date
 
 st.set_page_config(page_title="ICE PROP LAB", layout="wide", initial_sidebar_state="expanded")
 
@@ -13,77 +15,115 @@ st.set_page_config(page_title="ICE PROP LAB", layout="wide", initial_sidebar_sta
 if 'my_board' not in st.session_state:
     st.session_state.my_board = []
 if 'next_opponent' not in st.session_state:
-    st.session_state.next_opponent = "BOS"
+    st.session_state.next_opponent = None
+if 'filter_teams' not in st.session_state:
+    st.session_state.filter_teams = None 
+
+# ── Team abbreviation lookup ────────────────────────────────────────────────────
+@st.cache_data(ttl=86400)
+def get_team_abbr_map():
+    all_teams = static_teams.get_teams()
+    return {str(t['id']): t['abbreviation'] for t in all_teams}
+
+team_abbr_map = get_team_abbr_map()
+
+# ── Today's NBA Games ───────────────────────────────────────────────────────────
+today_str = date.today().strftime("%Y-%m-%d")
+
+@st.cache_data(ttl=300)
+def get_todays_games(game_date: str):
+    try:
+        sb = scoreboardv2.ScoreboardV2(game_date=game_date, league_id="00", day_offset=0)
+        game_header_df = sb.game_header.get_data_frame()
+        if game_header_df.empty: return [], 0
+        game_header_df = game_header_df.drop_duplicates(subset=['GAME_ID'])
+        
+        games = []
+        for _, row in game_header_df.iterrows():
+            visitor_id = str(row['VISITOR_TEAM_ID'])
+            home_id    = str(row['HOME_TEAM_ID'])
+            games.append({
+                'away': team_abbr_map.get(visitor_id, '???'),
+                'home': team_abbr_map.get(home_id, '???'),
+                'status': row['GAME_STATUS_TEXT'],
+            })
+        return games, len(games)
+    except Exception as e:
+        st.warning(f"Could not load today's games: {str(e)}")
+        return [], 0
+
+games_today, num_games = get_todays_games(today_str)
+
+# ── Game filter dropdown – top of sidebar ──────────────────────────────────────
+st.sidebar.markdown("**Today's Matchups**")
+
+if num_games == 0:
+    st.sidebar.caption("No games found today")
+    selected_game = None
+else:
+    game_options = ["— All Games —"]
+    game_values  = [None]
+
+    for g in games_today:
+        label = f"{g['away']} @ {g['home']}  •  {g['status']}"
+        game_options.append(label)
+        game_values.append((g['away'], g['home']))
+
+    current_filter = st.session_state.filter_teams
+    default_index = 0
+    if current_filter:
+        try:
+            match_label = f"{current_filter[0]} @ {current_filter[1]}"
+            default_index = game_options.index(match_label) + 1
+        except ValueError:
+            pass
+
+    selected_idx = st.sidebar.selectbox(
+        "Filter by game",
+        options=range(len(game_options)),
+        format_func=lambda i: game_options[i],
+        index=default_index,
+        label_visibility="collapsed",
+        key="game_filter_select"
+    )
+
+    selected_game = game_values[selected_idx]
+
+    if selected_game is None:
+        if st.session_state.filter_teams is not None:
+            st.session_state.filter_teams = None
+            st.session_state.next_opponent = None
+    else:
+        away, home = selected_game
+        if st.session_state.filter_teams != (away, home):
+            st.session_state.filter_teams = (away, home)
+            st.session_state.next_opponent = home
+
+if st.session_state.filter_teams:
+    a, h = st.session_state.filter_teams
+    st.sidebar.caption(f"Active filter: **{a} @ {h}**")
+else:
+    st.sidebar.caption(f"{num_games} game{'s' if num_games != 1 else ''} today" if num_games > 0 else "No games scheduled")
+
+st.sidebar.markdown("---")
 
 # ── Season helpers ──────────────────────────────────────────────────────────────
 def get_current_season():
     today = datetime.today()
-    if today.month >= 10:
-        return f"{today.year}-{str(today.year + 1)[-2:]}"
-    else:
-        return f"{today.year-1}-{str(today.year)[-2:]}"
+    return f"{today.year}-{str(today.year + 1)[-2:]}" if today.month >= 10 else f"{today.year-1}-{str(today.year)[-2:]}"
 
 CURRENT_SEASON = get_current_season()
 current_year = int(CURRENT_SEASON.split('-')[0])
 PREVIOUS_SEASON = f"{current_year - 1}-{str(current_year)[-2:]}"
 
-# ── Load pre-downloaded static data ─────────────────────────────────────────────
-@st.cache_data(ttl="12h")
-def load_nba_static():
-    try:
-        df_players = pd.read_parquet("data/players.parquet")
-        df_teams   = pd.read_parquet("data/active_player_teams.parquet")
-        
-        player_team_map = dict(zip(
-            df_teams['PLAYER_ID'].astype(str),
-            df_teams['TEAM_ABBR']
-        ))
-        
-        player_options = []
-        for _, row in df_players.iterrows():
-            pid_str = str(row['id'])
-            if pid_str in player_team_map:
-                team = player_team_map[pid_str]
-                display_name = f"{row['full_name']} • {team}"
-                player_options.append((display_name, row['full_name']))
-        
-        player_options.sort(key=lambda x: x[1].lower())
-        
-        return player_options, player_team_map
-    except Exception as e:
-        st.error(f"Could not load static NBA data: {e}")
-        st.stop()
-
-player_options, player_team_map = load_nba_static()
-
-player_list_display = [opt[0] for opt in player_options]
-player_list_clean   = [opt[1] for opt in player_options]
-
 # ── Styling ─────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .main {background: linear-gradient(135deg, #0a1a2f 0%, #001122 100%);}
-    h1, h2, h3 {font-family: 'Exo 2', sans-serif; color: #00e0ff !important;
-                text-shadow: 0 0 20px #00e0ff, 0 0 40px rgba(0,224,255,0.5);}
-    .stButton>button {background: linear-gradient(45deg, #003366, #00aaff) !important;
-                      color: white !important; border: 2px solid #00e0ff !important;
-                      font-weight: 700; border-radius: 12px; box-shadow: 0 0 25px rgba(0,224,255,0.6);}
-    div[data-baseweb="select"] > div {background: rgba(0,224,255,0.08) !important;
-                                      border: 1px solid #00aaff !important; color: #00e0ff !important;}
-    table {width: 100%; border-collapse: collapse; 
-           font-family: 'Exo 2', sans-serif; color: #00e0ff;
-           background: rgba(10,30,60,0.7); border: 1px solid #00aaff;
-           border-radius: 10px; overflow: hidden;
-           box-shadow: 0 0 20px rgba(0,170,255,0.3);}
-    th {background: linear-gradient(90deg, #003366, #001122);
-        color: #00ffff; padding: 10px; text-align: center;
-        font-weight: 700; border-bottom: 2px solid #00e0ff;}
-    td {padding: 12px; text-align: left; vertical-align: top;
-        border-bottom: 1px solid rgba(0,224,255,0.12);}
-    .hit-box {background:rgba(10,30,60,0.7); padding:10px; border-radius:10px; 
-              border:1px solid #00aaff; margin-bottom:12px;}
-    .highlight-stat {background: rgba(0, 180, 120, 0.18); padding: 6px 10px; 
-                     border-radius: 6px; border-left: 4px solid #00cc88;}
+    h1, h2, h3 {font-family: 'Exo 2', sans-serif; color: #00e0ff !important; text-shadow: 0 0 20px #00e0ff;}
+    .stButton>button {background: linear-gradient(45deg, #003366, #00aaff) !important; color: white !important; border: 1px solid #00e0ff !important; font-weight: 700; border-radius: 8px;}
+    .hit-box {background:rgba(10,30,60,0.7); padding:10px; border-radius:10px; border:1px solid #00aaff; margin-bottom:12px;}
+    .highlight-stat {background: rgba(0, 180, 120, 0.18); padding: 6px 10px; border-radius: 6px; border-left: 4px solid #00cc88;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -92,365 +132,227 @@ def dropdown_values():
     return [None] + [round(x, 1) for x in np.arange(0.5, 60.6, 1.0)]
 
 def get_player_id(name):
-    for _, row in pd.read_parquet("data/players.parquet").iterrows():
-        if row['full_name'].lower() == name.lower():
-            return row['id']
+    for p in players.get_players():
+        if p['full_name'].lower() == name.lower(): return p['id']
     return None
+
+def get_hitrate_edge(hitrate_str: str) -> float:
+    if not hitrate_str or "AVG:" not in hitrate_str: return 0.0
+    try:
+        avg_part = hitrate_str.split("AVG:")[1]
+        o_pct = float(avg_part.split("O ")[1].split("%")[0].strip())
+        return max(o_pct, 100 - o_pct) - 50
+    except: return 0.0
+
+@st.cache_data(ttl=7200)
+def get_active_players_with_teams():
+    for season in [CURRENT_SEASON, PREVIOUS_SEASON]:
+        try:
+            df = leaguedashplayerstats.LeagueDashPlayerStats(season=season, season_type_all_star="Regular Season").get_data_frames()[0]
+            if not df.empty and len(df) > 80:
+                df = df[df['TEAM_ABBREVIATION'].notna() & (df['TEAM_ABBREVIATION'] != '')]
+                return dict(zip(df['PLAYER_ID'].astype(str), df['TEAM_ABBREVIATION']))
+        except: continue
+    return {}
 
 @st.cache_data(ttl=300)
 def get_player_games(pid):
     for season in [CURRENT_SEASON, PREVIOUS_SEASON]:
         try:
-            gamelog = PlayerGameLog(player_id=str(pid), season=season,
-                                   season_type_all_star='Regular Season')
-            df = gamelog.get_data_frames()[0]
+            df = PlayerGameLog(player_id=str(pid), season=season, season_type_all_star='Regular Season').get_data_frames()[0]
             if not df.empty:
                 df["GAME_DATE_DT"] = pd.to_datetime(df["GAME_DATE"])
                 df["GAME_DATE"] = df["GAME_DATE_DT"].dt.strftime("%m/%d")
-                df["PLAYER_ID"] = pid
-                df = df.sort_values("GAME_DATE_DT", ascending=False).reset_index(drop=True)
-                return df
-        except:
-            continue
+                return df.sort_values("GAME_DATE_DT", ascending=False).reset_index(drop=True)
+        except: continue
     return pd.DataFrame()
 
-def get_hitrate_edge(hitrate_str: str) -> float:
-    if not hitrate_str or "AVG:" not in hitrate_str:
-        return 0.0
-    try:
-        avg_part = hitrate_str.split("AVG:")[1]
-        o_str = avg_part.split("O ")[1].split("%")[0].strip()
-        o_pct = float(o_str)
-        strongest = max(o_pct, 100 - o_pct)
-        return strongest - 50
-    except:
-        return 0.0
+# ── Load and Filter Player List ────────────────────────────────────────────────
+player_team_map = get_active_players_with_teams()
+player_options = []
+for p in players.get_players():
+    pid_str = str(p["id"])
+    if pid_str in player_team_map:
+        team = player_team_map[pid_str]
+        if st.session_state.filter_teams and team not in st.session_state.filter_teams: 
+            continue
+        player_options.append((f"{p['full_name']} • {team}", p['full_name']))
 
-common_teams = sorted(['ATL','BOS','BKN','CHA','CHI','CLE','DAL','DEN','DET','GSW','HOU','IND','LAC','LAL','MEM','MIA','MIL','MIN','NOP','NYK','OKC','ORL','PHI','PHX','POR','SAC','SAS','TOR','UTA','WAS'])
+player_options.sort(key=lambda x: x[1].lower())
+player_list_display = [opt[0] for opt in player_options]
+player_list_clean = [opt[1] for opt in player_options]
 
-available_stats = [
-    'PTS', 'REB', 'AST', 'STL', 'BLK', 'TOV',
-    'FGM', 'FGA', 'FG3M', 'FG3A', '2PM', '2PA',
-    'Pts+Reb', 'Pts+Ast', 'Ast+Reb', 'Stl+Blk', 'PRA'
+common_teams = ["— Any —"] + sorted(['ATL','BOS','BKN','CHA','CHI','CLE','DAL','DEN','DET','GSW','HOU','IND','LAC','LAL','MEM','MIA','MIL','MIN','NOP','NYK','OKC','ORL','PHI','PHX','POR','SAC','SAS','TOR','UTA','WAS'])
+
+available_stats = ['PTS', 'REB', 'AST', 'STL', 'BLK', 'TOV', 'FGM', 'FGA', 'FG3M', 'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast', 'Ast+Reb', 'Stl+Blk', 'PRA']
+odds_options = [
+    "",
+    "-300", "-275", "-250", "-225", "-200",
+    "-190", "-180", "-170", "-160", "-155", "-150",
+    "-145", "-140", "-135", "-130", "-125", "-120", "-115", "-110", "-105",
+    "-100", "+100", "+105", "+110", "+115", "+118", "+120", "+125", "+130", "+135", "+140", "+145",
+    "+150", "+155", "+160", "+165", "+170", "+175", "+180", "+185", "+190", "+195", "+200",
+    "+210", "+220", "+230", "+240", "+250",
+    "+275", "+300", "-225", "-250", "-275", "-300"
 ]
 
-odds_options = [""] + ["-110","-105","-115","-120","-125","-130"] + ["+100","+105","+110","+115","+120","+130"] + \
-               [f"-{x}" for x in range(101,301,1)] + [f"+{x}" for x in range(100,501,5) if x % 5 == 0]
-
 # ── Sidebar ─────────────────────────────────────────────────────────────────────
-
-# Top row: Player + Stat + Opponent
 top_row = st.sidebar.columns([3, 2, 2])
 with top_row[0]:
-    selected_display = st.selectbox(
-        "Player",
-        ["— Choose player —"] + player_list_display,
-        key="player_select",
-        label_visibility="collapsed"
-    )
+    selected_display = st.selectbox("Player", ["— Choose player —"] + player_list_display, key="player_select", label_visibility="collapsed")
 with top_row[1]:
-    selected_stat = st.selectbox(
-        "Stat",
-        ["— Select stat —"] + available_stats,
-        index=1,
-        key="stat_select",
-        label_visibility="collapsed"
-    )
+    selected_stat = st.selectbox("Stat", ["— Select stat —"] + available_stats, index=1, key="stat_select", label_visibility="collapsed")
 with top_row[2]:
-    next_opp = st.selectbox(
-        "Opponent",
-        common_teams,
-        index=common_teams.index(st.session_state.next_opponent) if st.session_state.next_opponent in common_teams else 0,
-        key="opp_select",
-        label_visibility="collapsed"
-    )
+    default_opp_idx = 0
+    if st.session_state.next_opponent and st.session_state.next_opponent in common_teams:
+        default_opp_idx = common_teams.index(st.session_state.next_opponent)
+    
+    next_opp = st.selectbox("Opponent", common_teams, index=default_opp_idx, key="opp_select", label_visibility="collapsed")
 
-if next_opp != st.session_state.next_opponent:
-    st.session_state.next_opponent = next_opp
+st.session_state.next_opponent = None if next_opp == "— Any —" else next_opp
 
-selected_player = None
-if selected_display != "— Choose player —":
-    for disp, clean in zip(player_list_display, player_list_clean):
-        if disp == selected_display:
-            selected_player = clean
-            break
+selected_player = next((clean for disp, clean in player_options if disp == selected_display), None)
+pid = get_player_id(selected_player) if selected_player else None
+player_team = player_team_map.get(str(pid), "???") if pid else "???"
 
-player_team = "???"
-pid = None
-if selected_player:
-    pid = get_player_id(selected_player)
-    if pid and str(pid) in player_team_map:
-        player_team = player_team_map[str(pid)]
-
-# Prop line
 lines = {}
 if selected_stat and selected_stat != "— Select stat —":
     st.sidebar.markdown(f"**{selected_stat} line**")
-    val = st.sidebar.selectbox(
-        f"{selected_stat} line",
-        dropdown_values(),
-        format_func=lambda x: "—" if x is None else f"{x}",
-        key=f"line_{selected_stat}",
-        label_visibility="collapsed"
-    )
-    if val is not None:
-        lines[selected_stat] = val
+    val = st.sidebar.selectbox(f"{selected_stat} line", dropdown_values(), format_func=lambda x: "—" if x is None else f"{x}", key=f"line_{selected_stat}", label_visibility="collapsed")
+    if val is not None: lines[selected_stat] = val
 
-# My Board
 with st.sidebar.expander(f"📋 My Board ({len(st.session_state.my_board)})", expanded=len(st.session_state.my_board)>0):
     if not st.session_state.my_board:
-        st.caption("No props saved yet. Pin with 📌")
+        st.caption("No props saved. Pin with 📌")
     else:
-        board_sorted = sorted(
-            st.session_state.my_board,
-            key=lambda x: (get_hitrate_edge(x.get("hitrate_str","")), x.get("timestamp","")),
-            reverse=True
-        )
+        board_sorted = sorted(st.session_state.my_board, key=lambda x: (get_hitrate_edge(x.get("hitrate_str","")), x.get("timestamp","")), reverse=True)
         for idx, item in enumerate(board_sorted):
-            original_idx = st.session_state.my_board.index(item)
+            orig_idx = st.session_state.my_board.index(item)
             col1, col2 = st.columns([6,1])
             with col1:
                 odds_d = f" {item['odds']}" if item.get('odds') else ""
-                st.markdown(f"**{item['player']} • {item['team']}**  \n<small>{item['stat']} {item['line']}{odds_d} {item['hitrate_str']}</small>", unsafe_allow_html=True)
+                st.markdown(f"**{item['player']} • {item['team']}**<br><small>{item['stat']} {item['line']}{odds_d} {item['hitrate_str']}</small>", unsafe_allow_html=True)
             with col2:
-                if st.button("×", key=f"rm_{original_idx}", help="Remove"):
-                    st.session_state.my_board.pop(original_idx)
+                if st.button("×", key=f"rm_{idx}"):
+                    st.session_state.my_board.pop(orig_idx)
                     st.rerun()
-        if st.button("🗑️ Clear All", use_container_width=True):
-            st.session_state.my_board = []
-            st.rerun()
 
 st.sidebar.markdown("---")
-
-# Bottom row: Recent games + Refresh
 bottom_row = st.sidebar.columns([2, 1])
-with bottom_row[0]:
-    games_to_show = st.selectbox(
-        "Recent games",
-        [5,10,15,20],
-        index=2,
-        label_visibility="collapsed"
-    )
+with bottom_row[0]: 
+    games_to_show = st.selectbox("Recent games", [5,10,15,20], index=2, label_visibility="collapsed")
 with bottom_row[1]:
-    if st.button("🔄", help="Refresh caches & data"):
+    if st.button("🔄"): 
         st.cache_data.clear()
         st.rerun()
 
-st.sidebar.markdown("**Upload DvP**")
-uploaded_file = st.sidebar.file_uploader("", type=["xlsx", "csv"], label_visibility="collapsed")
-
-dvp_df = None
-if uploaded_file is not None:
-    try:
-        if uploaded_file.name.endswith('.csv'):
-            dvp_df = pd.read_csv(uploaded_file)
-        else:
-            dvp_df = pd.read_excel(uploaded_file, sheet_name=0)
-
-        if 'TEAM' in dvp_df.columns:
-            dvp_df['TEAM'] = dvp_df['TEAM'].str.split('(').str[0].str.strip()
-
-        team_map = {
-            'Utah':'UTA','Washington':'WAS','Sacramento':'SAC','Chicago':'CHI',
-            'New Orleans':'NOP','Atlanta':'ATL','Indiana':'IND','Portland':'POR',
-            'Miami':'MIA','Memphis':'MEM','Dallas':'DAL','Los Angeles':'LAC',
-            'Denver':'DEN','Cleveland':'CLE','Milwaukee':'MIL','Brooklyn':'BKN',
-            'Orlando':'ORL','Philadelphia':'PHI','Minnesota':'MIN','Golden State':'GSW',
-            'Charlotte':'CHA','San Antonio':'SAS','Phoenix':'PHX','New York':'NYK',
-            'Toronto':'TOR','Detroit':'DET','Houston':'HOU','Boston':'BOS',
-            'Oklahoma City':'OKC', 'LA Clippers':'LAC', 'LA Lakers':'LAL'
-        }
-        if 'TEAM_ABBR' not in dvp_df.columns:
-            dvp_df['TEAM_ABBR'] = dvp_df['TEAM'].map(team_map).fillna(dvp_df['TEAM'].str.upper()[:3])
-
-        for col in ['PTS','REB','AST','3PM','STL','BLK','TO']:
-            if col in dvp_df.columns:
-                dvp_df[f'{col}_rank'] = dvp_df[col].rank(method='min', ascending=True).astype(int)
-
-    except Exception as e:
-        st.sidebar.error(f"File error: {e}")
-
 # ── Main content ────────────────────────────────────────────────────────────────
-
 if not selected_player:
-    st.info("Select a player to begin.")
+    st.info("Select a player from the sidebar.")
     st.stop()
 
-if not pid:
-    st.error("Player ID not found.")
+df = get_player_games(pid)
+if df.empty: 
     st.stop()
 
-with st.spinner("Loading game logs..."):
-    df = get_player_games(pid)
-    if df.empty:
-        st.error("No game data.")
-        st.stop()
-
-df["PLAYER_NAME"] = selected_player
-
+# Multi-stat calculation
 df["Pts+Ast"] = df["PTS"] + df["AST"]
 df["Pts+Reb"] = df["PTS"] + df["REB"]
 df["Ast+Reb"] = df["AST"] + df["REB"]
 df["Stl+Blk"] = df["STL"] + df["BLK"]
-df["2PM"] = df["FGM"] - df["FG3M"]
-df["2PA"] = df["FGA"] - df["FG3A"]
-df["PRA"] = df["PTS"] + df["REB"] + df["AST"]
+df["PRA"]     = df["PTS"] + df["REB"] + df["AST"]
 
-# ── Layout ──────────────────────────────────────────────────────────────────────
-left_col, right_col = st.columns([3.5, 1.5])
+# ── Filter game log by selected opponent (if any) ──────────────────────────────
+if st.session_state.next_opponent:
+    opp = st.session_state.next_opponent
+    df_filtered = df[df['MATCHUP'].str.contains(opp)]
+    table_title = f"Games vs {opp} (last {len(df_filtered)})"
+else:
+    df_filtered = df
+    table_title = f"Recent Game Log (last 15)"
 
-with left_col:
-    if lines:
-        pdata = df.sort_values("GAME_DATE_DT", ascending=False)
-        for stat, line in lines.items():
-            over_list = []
-            for w in [5,10,15]:
-                if len(pdata) >= w:
-                    overs = (pdata.head(w)[stat] > line).sum()
-                    pct = overs / w * 100 if w > 0 else 0
-                    over_list.append(pct)
+st.markdown("---")  # visual separation
 
-            parts = []
-            for i, w in enumerate([5,10,15]):
-                if len(pdata) >= w:
-                    pct = over_list[i]
-                    color = "#00ff88" if pct > 73 else "#ffcc00" if pct >= 60 else "#ff5555"
-                    parts.append(f"<span style='color:{color}'>{pct:.0f}%</span>")
-                else:
-                    parts.append("—")
-            hit_str = " | ".join(parts)
-
-            if over_list:
-                avg_o = np.mean(over_list)
-                avg_u = 100 - avg_o
-                o_c = "#00ff88" if avg_o > 75 else "#ffcc00" if avg_o >= 61 else "#ff5555"
-                u_c = "#00ff88" if avg_u > 75 else "#ffcc00" if avg_u >= 61 else "#ff5555"
-                avg_text = f" — AVG: <span style='color:{o_c}'>O {avg_o:.0f}%</span> / <span style='color:{u_c}'>U {avg_u:.0f}%</span>"
-            else:
-                avg_text = ""
-
-            content = f"<strong>{stat} {line}</strong> {hit_str}{avg_text}"
-            c1, c2, c3 = st.columns([5.5, 3.5, 1])
-            with c1:
-                st.markdown(f"<div class='hit-box'>{content}</div>", unsafe_allow_html=True)
-            with c2:
-                odds_key = f"odds_{selected_player}_{stat}_{line}"
-                st.selectbox("Odds", odds_options, key=odds_key, label_visibility="collapsed")
-            with c3:
-                pin_key = f"pin_{selected_player}_{stat}_{line}"
-                if st.button("📌", key=pin_key):
-                    odds_val = st.session_state.get(odds_key, "")
-                    entry = {
-                        "player": selected_player, "team": player_team,
-                        "opponent": next_opp, "stat": stat, "line": f"{line:.1f}",
-                        "odds": odds_val, "hitrate_str": f"{hit_str}{avg_text}",
-                        "timestamp": datetime.now().strftime("%m/%d %H:%M")
-                    }
-                    exists = any(
-                        e["player"] == entry["player"] and
-                        e["stat"] == entry["stat"] and
-                        e["line"] == entry["line"]
-                        for e in st.session_state.my_board
-                    )
-                    if not exists:
-                        st.session_state.my_board.append(entry)
-                        st.toast("Pinned", icon="📌")
+# Full-width content now (no right column)
+if lines:
+    pdata = df.sort_values("GAME_DATE_DT", ascending=False)
+    for stat, line in lines.items():
+        over_list = []
+        for w in [5,10,15]:
+            if len(pdata) >= w: 
+                over_list.append((pdata.head(w)[stat] > line).mean() * 100)
+        
+        parts = [f"<span style='color:{('#00ff88' if p > 73 else '#ffcc00' if p >= 60 else '#ff5555')}'>{p:.0f}%</span>" for p in over_list]
+        hit_str = " | ".join(parts)
+        avg_o = np.mean(over_list)
+        avg_u = 100 - avg_o
+        avg_text = f" — AVG: <span style='color:{('#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555')}'>O {avg_o:.0f}%</span> / <span style='color:{('#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555')}'>U {avg_u:.0f}%</span>"
+        
+        c1, c2, c3 = st.columns([6, 3, 1])
+        with c1: 
+            st.markdown(f"<div class='hit-box'><strong>{stat} {line}</strong> {hit_str}{avg_text}</div>", unsafe_allow_html=True)
+        with c2: 
+            odds_key = f"odds_{selected_player}_{stat}"
+            st.selectbox("Odds", odds_options, key=odds_key, label_visibility="collapsed")
+        with c3:
+            if st.button("📌", key=f"pin_{stat}"):
+                entry = {
+                    "player": selected_player, 
+                    "team": player_team, 
+                    "stat": stat, 
+                    "line": f"{line:.1f}", 
+                    "odds": st.session_state.get(odds_key, ""), 
+                    "hitrate_str": hit_str + avg_text, 
+                    "timestamp": datetime.now()
+                }
+                if not any(e['player']==entry['player'] and e['stat']==entry['stat'] and e['line']==entry['line'] for e in st.session_state.my_board):
+                    st.session_state.my_board.append(entry)
+                    st.toast(f"Pinned {selected_player}", icon="📌")
                     st.rerun()
 
-    recent = df.head(games_to_show)
-    if lines:
-        for stat, line in lines.items():
-            fig = go.Figure()
-            colors = ["#00ff88" if v > line else "#ff4444" for v in recent[stat]]
-            fig.add_trace(go.Bar(x=recent["GAME_DATE"], y=recent[stat], marker_color=colors,
-                                 text=recent[stat].round(1), textposition="inside", textfont=dict(color="#000")))
-            fig.add_hline(y=line, line_color="#00ffff", line_dash="dash")
-            fig.update_layout(height=320, showlegend=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                              font_color="#00e0ff", margin=dict(t=20,b=40,l=30,r=30), yaxis_title=stat)
-            st.plotly_chart(fig, use_container_width=True)
+        # Stat bar chart
+        fig = go.Figure()
+        colors = ["#00ff88" if v > line else "#ff4444" for v in df.head(15)[stat]]
+        fig.add_trace(go.Bar(x=df.head(15)["GAME_DATE"], y=df.head(15)[stat], marker_color=colors, text=df.head(15)[stat].round(1), textposition="inside"))
+        fig.add_hline(y=line, line_dash="dash", line_color="#00ffff")
+        fig.update_layout(height=280, margin=dict(t=10,b=10), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="#00e0ff")
+        st.plotly_chart(fig, use_container_width=True)
 
-    if len(recent) >= 3:
-        x = np.arange(len(recent))
-        y = recent["MIN"].values
-        slope, intercept = np.polyfit(x, y, 1)
-        recent_avg = recent["MIN"].mean()
-        projected = recent_avg + slope
+# ── Minutes graph ──────────────────────────────────────────────────────────────
+recent_min = df.head(games_to_show)
+if len(recent_min) >= 3:
+    x_min = np.arange(len(recent_min))
+    y_min = recent_min["MIN"].values
+    slope_min, intercept_min = np.polyfit(x_min, y_min, 1)
+    recent_avg_min = recent_min["MIN"].mean()
+    projected_min = recent_avg_min + slope_min
 
-        concern = "🟢 Solid" if projected >= 32 else "🟡 Some concern <32" if projected >= 28 else "🟠 Moderate <28" if projected >= 25 else "🔴 High <25"
-        arrow = "↑" if slope > 0.3 else "↓" if slope < -0.3 else "→"
-        st.markdown(f"**Projected next min**: ≈ **{projected:.1f}**  ({arrow} {slope:.1f} min/game) — **{concern}**")
+    concern_min = "🟢 Solid" if projected_min >= 32 else "🟡 Some concern <32" if projected_min >= 28 else "🔴 High risk"
+    arrow_min = "↑" if slope_min > 0.3 else "↓" if slope_min < -0.3 else "→"
+    st.markdown(f"**Projected next min**: ≈ **{projected_min:.1f}**  ({arrow_min} {slope_min:.1f} min/game) — **{concern_min}**")
 
-        fig_min = go.Figure()
-        colors_min = []
-        for m in recent["MIN"]:
-            if m >= 35: colors_min.append("#00ff88")
-            elif m >= 30: colors_min.append("#88ff88")
-            elif m >= 25: colors_min.append("#ffff88")
-            elif m >= 20: colors_min.append("#ffcc88")
-            else: colors_min.append("#ff8888")
+    fig_min = go.Figure()
+    colors_min = ["#00ff88" if m >= 35 else "#88ff88" if m >= 30 else "#ffff88" if m >= 25 else "#ffcc88" if m >= 20 else "#ff8888" for m in recent_min["MIN"]]
+    fig_min.add_trace(go.Bar(x=recent_min["GAME_DATE"], y=recent_min["MIN"], marker_color=colors_min, text=recent_min["MIN"].round(1), textposition="auto", textfont=dict(color="#000")))
+    fig_min.add_hline(y=recent_avg_min, line_dash="dot", line_color="#00e0ff", annotation_text=f"Avg: {recent_avg_min:.1f}", annotation_position="top right")
+    fig_min.add_trace(go.Scatter(x=recent_min["GAME_DATE"], y=slope_min * x_min + intercept_min, mode='lines', line=dict(color='#00e0ff', width=2, dash='dash')))
+    fig_min.update_layout(height=340, showlegend=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="#00e0ff", margin=dict(t=20,b=40,l=30,r=30))
+    st.plotly_chart(fig_min, use_container_width=True)
 
-        fig_min.add_trace(go.Bar(x=recent["GAME_DATE"], y=recent["MIN"], marker_color=colors_min,
-                                 text=recent["MIN"].round(1), textposition="auto", textfont=dict(color="#000")))
-        fig_min.add_hline(y=recent_avg, line_dash="dot", line_color="#00e0ff",
-                          annotation_text=f"Avg: {recent_avg:.1f}", annotation_position="top right")
-        if len(recent) >= 3:
-            trend_y = slope * x + intercept
-            fig_min.add_trace(go.Scatter(x=recent["GAME_DATE"], y=trend_y, mode='lines',
-                                         line=dict(color='#00e0ff', width=2, dash='dash')))
-        fig_min.update_layout(height=340, showlegend=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                              font_color="#00e0ff", margin=dict(t=20,b=40,l=30,r=30), yaxis_title="Minutes")
-        st.plotly_chart(fig_min, use_container_width=True)
+# ── Game Log Table – at the very end ───────────────────────────────────────────
+with st.expander(f"📊 {table_title}", expanded=False):
+    display_cols = ["GAME_DATE", "MATCHUP", "WL", "MIN", "PTS", "REB", "AST", "STL", "BLK", "TOV", "FG3M", "+/-"]
+    available_cols = [c for c in display_cols if c in df_filtered.columns]
+    
+    def highlight_minutes(val):
+        if pd.isna(val): return ''
+        color = '#00cc88' if val >= 32 else '#ffcc00' if val >= 28 else '#ff5555'
+        return f'background-color: {color}; color: black'
+    
+    styled_df = df_filtered.head(15)[available_cols].style\
+        .format(precision=1)\
+        .map(highlight_minutes, subset=pd.IndexSlice[:, ['MIN'] if 'MIN' in available_cols else []])
+    
+    st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
-# ── Defensive Context ──────────────────────────────────────────────────────────
-with right_col:
-    def get_matchup_indicator(stat, rank):
-        if stat == 'TO':
-            if rank <= 8:   return "🔴", "#ff4d4d", "very few forced"
-            if rank <= 15:  return "🟠", "#ffaa00", "some pressure"
-            if rank <= 22:  return "⚪", "#cccccc", "neutral"
-            if rank <= 27:  return "🟢", "#88cc88", "good for Over TO"
-            return "🟢🟢", "#00cc00", "excellent for Over TO"
-        else:
-            if rank <= 8:   return "🔴", "#ff4d4d", "very tough"
-            if rank <= 15:  return "🟠", "#ffaa00", "above avg"
-            if rank <= 22:  return "⚪", "#cccccc", "neutral"
-            if rank <= 27:  return "🟢", "#88cc88", "favorable"
-            return "🟢🟢", "#00cc00", "excellent for Over"
-
-    if dvp_df is None or dvp_df.empty:
-        st.info("Upload DvP file in sidebar")
-    else:
-        opp_row = dvp_df[dvp_df['TEAM_ABBR'].str.upper() == st.session_state.next_opponent.upper()]
-        if not opp_row.empty:
-            row = opp_row.iloc[0]
-            st.markdown(f"**{st.session_state.next_opponent}** allowed (rank)")
-
-            current_stat = selected_stat if selected_stat and selected_stat != "— Select stat —" else None
-
-            for s in ['PTS','REB','AST','3PM','STL','BLK','TO']:
-                if s in row and pd.notna(row[s]):
-                    val = row[s]
-                    rank = row.get(f'{s}_rank', None)
-                    if rank is None:
-                        st.markdown(f"• **{s}**: {val:.2f} (—)")
-                        continue
-
-                    icon, color, desc = get_matchup_indicator(s, rank)
-
-                    highlight_class = "highlight-stat" if current_stat == s else ""
-
-                    val_str = f"{val:.2f}"
-                    rank_str = f"{rank}" if rank is not None else "—"
-
-                    st.markdown(
-                        f"<div class='{highlight_class}'>"
-                        f"• {s}: {val_str} (rank {rank_str}) "
-                        f"<span style='color:{color}; font-size:1.3em; font-weight:bold;'>{icon}</span> "
-                        f"<small>{desc}</small>"
-                        f"</div>",
-                        unsafe_allow_html=True
-                    )
-        else:
-            st.info(f"No defensive data found for {st.session_state.next_opponent}")
-
-st.markdown("<p style='text-align:center; color:#88f0ff; padding:3rem;'>ICE PROP LAB • 2025-26</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center; color:#88f0ff; padding-top:2rem;'>ICE PROP LAB • 2025-26</p>", unsafe_allow_html=True)
