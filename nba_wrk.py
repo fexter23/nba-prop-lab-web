@@ -1,6 +1,7 @@
 # nba_wrk.py – ICE PROP LAB • Single Player + Persistent Opponent + DvP Panel
 
 import streamlit as st
+import json
 from nba_api.stats.static import players
 from nba_api.stats.static import teams as static_teams
 from nba_api.stats.endpoints import leaguedashplayerstats, PlayerGameLog, scoreboardv2
@@ -229,16 +230,12 @@ st.sidebar.header(f"📋 My Board ({len(st.session_state.my_board)})")
 if not st.session_state.my_board:
     st.sidebar.caption("No props saved. Pin with 📌")
 else:
-    # 1. Sort global list first (as before)
     board_sorted = sorted(st.session_state.my_board, key=lambda x: (get_hitrate_edge(x.get("hitrate_str","")), x.get("timestamp","")), reverse=True)
-    
-    # 2. Group by matchup
     grouped = defaultdict(list)
     for item in board_sorted:
         matchup = item.get("matchup", "Other")
         grouped[matchup].append(item)
     
-    # 3. Render grouped UI
     for matchup, props in grouped.items():
         with st.sidebar.expander(f"🏀 {matchup}", expanded=True):
             for item in props:
@@ -247,7 +244,6 @@ else:
                     odds_d = f" {item['odds']}" if item.get('odds') else ""
                     st.markdown(f"**{item['player']} • {item['team']}**<br><small>{item['stat']} {item['line']}{odds_d} {item['hitrate_str']}</small>", unsafe_allow_html=True)
                 with col2:
-                    # Find original index to remove correctly
                     if st.button("×", key=f"rm_{item['player']}_{item['stat']}_{item['timestamp']}"):
                         st.session_state.my_board = [i for i in st.session_state.my_board if i != item]
                         st.rerun()
@@ -260,6 +256,45 @@ with bottom_row[1]:
     if st.button("🔄"): 
         st.cache_data.clear()
         st.rerun()
+
+# ── Data Management (Bottom) ──────────────────────────────────────────────────
+st.sidebar.markdown("### 💾 Data Management")
+
+def get_board_json():
+    # Helper to serialize timestamps to ISO strings
+    data = []
+    for entry in st.session_state.my_board:
+        item = entry.copy()
+        # Ensure timestamp is string for JSON
+        if isinstance(item.get('timestamp'), datetime):
+            item['timestamp'] = item['timestamp'].isoformat()
+        data.append(item)
+    return json.dumps(data)
+
+# Create a dynamic filename: board_YYYYMMDD_HHMM.json
+dynamic_filename = f"board_{datetime.now().strftime('%Y%m%d_%H%M')}.json"
+
+st.sidebar.download_button(
+    label="Download Board", 
+    data=get_board_json(), 
+    file_name=dynamic_filename, 
+    mime="application/json"
+)
+
+uploaded_file = st.sidebar.file_uploader("Upload Board", type="json")
+if uploaded_file is not None:
+    try:
+        data = json.load(uploaded_file)
+        # Convert the ISO string back into a datetime object for each entry
+        for entry in data:
+            if isinstance(entry.get('timestamp'), str):
+                entry['timestamp'] = datetime.fromisoformat(entry['timestamp'])
+        
+        st.session_state.my_board = data
+        st.sidebar.success("Board restored successfully!")
+        st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"Error loading file: {e}")
 
 # ── Main content ────────────────────────────────────────────────────────────────
 if not selected_player:
@@ -308,13 +343,12 @@ if lines:
             st.selectbox("Odds", odds_options, key=odds_key, label_visibility="collapsed")
         with c3:
             if st.button("📌", key=f"pin_{stat}"):
-                # Use lookup to find this player's specific matchup today
                 player_matchup = matchup_lookup.get(player_team, "Other/Unknown")
                 
                 entry = {
                     "player": selected_player, 
                     "team": player_team, 
-                    "matchup": player_matchup, # New field for grouping
+                    "matchup": player_matchup,
                     "stat": stat, 
                     "line": f"{line:.1f}", 
                     "odds": st.session_state.get(odds_key, ""), 
@@ -326,7 +360,6 @@ if lines:
                     st.toast(f"Pinned {selected_player}", icon="📌")
                     st.rerun()
 
-        # Stat bar chart
         fig = go.Figure()
         colors = ["#00ff88" if v > line else "#ff4444" for v in df.head(15)[stat]]
         fig.add_trace(go.Bar(x=df.head(15)["GAME_DATE"], y=df.head(15)[stat], marker_color=colors, text=df.head(15)[stat].round(1), textposition="inside"))
@@ -334,7 +367,6 @@ if lines:
         fig.update_layout(height=280, margin=dict(t=10,b=10), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="#00e0ff")
         st.plotly_chart(fig, use_container_width=True)
 
-# ── Minutes graph ──────────────────────────────────────────────────────────────
 recent_min = df.head(games_to_show)
 if len(recent_min) >= 3:
     x_min = np.arange(len(recent_min))
@@ -355,7 +387,6 @@ if len(recent_min) >= 3:
     fig_min.update_layout(height=340, showlegend=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="#00e0ff", margin=dict(t=20,b=40,l=30,r=30))
     st.plotly_chart(fig_min, use_container_width=True)
 
-# ── Game Log Table ─────────────────────────────────────────────────────────────
 with st.expander(f"📊 {table_title}", expanded=False):
     display_cols = ["GAME_DATE", "MATCHUP", "WL", "MIN", "PTS", "REB", "AST", "STL", "BLK", "TOV", "FG3M", "+/-"]
     available_cols = [c for c in display_cols if c in df_filtered.columns]
