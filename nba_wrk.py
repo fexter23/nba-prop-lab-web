@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, date
+from collections import defaultdict
 
 st.set_page_config(page_title="ICE PROP LAB", layout="wide", initial_sidebar_state="expanded")
 
@@ -54,6 +55,13 @@ def get_todays_games(game_date: str):
 
 games_today, num_games = get_todays_games(today_str)
 
+# Create a lookup for player team -> current matchup label
+matchup_lookup = {}
+for g in games_today:
+    label = f"{g['away']} @ {g['home']}"
+    matchup_lookup[g['away']] = label
+    matchup_lookup[g['home']] = label
+
 # ── Game filter dropdown – top of sidebar ──────────────────────────────────────
 st.sidebar.markdown("**Today's Matchups**")
 
@@ -74,7 +82,11 @@ else:
     if current_filter:
         try:
             match_label = f"{current_filter[0]} @ {current_filter[1]}"
-            default_index = game_options.index(match_label) + 1
+            # Find index matching the label portion
+            for i, opt in enumerate(game_options):
+                if match_label in opt:
+                    default_index = i
+                    break
         except ValueError:
             pass
 
@@ -185,16 +197,7 @@ player_list_clean = [opt[1] for opt in player_options]
 common_teams = ["— Any —"] + sorted(['ATL','BOS','BKN','CHA','CHI','CLE','DAL','DEN','DET','GSW','HOU','IND','LAC','LAL','MEM','MIA','MIL','MIN','NOP','NYK','OKC','ORL','PHI','PHX','POR','SAC','SAS','TOR','UTA','WAS'])
 
 available_stats = ['PTS', 'REB', 'AST', 'STL', 'BLK', 'TOV', 'FGM', 'FGA', 'FG3M', 'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast', 'Ast+Reb', 'Stl+Blk', 'PRA']
-odds_options = [
-    "",
-    "-300", "-275", "-250", "-225", "-200",
-    "-190", "-180", "-170", "-160", "-155", "-150",
-    "-145", "-140", "-135", "-130", "-125", "-120", "-115", "-110", "-105",
-    "-100", "+100", "+105", "+110", "+115", "+118", "+120", "+125", "+130", "+135", "+140", "+145",
-    "+150", "+155", "+160", "+165", "+170", "+175", "+180", "+185", "+190", "+195", "+200",
-    "+210", "+220", "+230", "+240", "+250",
-    "+275", "+300", "-225", "-250", "-275", "-300"
-]
+odds_options = ["", "-300", "-275", "-250", "-225", "-200", "-190", "-180", "-170", "-160", "-155", "-150", "-145", "-140", "-135", "-130", "-125", "-120", "-115", "-110", "-105", "-100", "+100", "+105", "+110", "+115", "+118", "+120", "+125", "+130", "+135", "+140", "+145", "+150", "+155", "+160", "+165", "+170", "+175", "+180", "+185", "+190", "+195", "+200", "+210", "+220", "+230", "+240", "+250", "+275", "+300"]
 
 # ── Sidebar ─────────────────────────────────────────────────────────────────────
 top_row = st.sidebar.columns([3, 2, 2])
@@ -221,21 +224,33 @@ if selected_stat and selected_stat != "— Select stat —":
     val = st.sidebar.selectbox(f"{selected_stat} line", dropdown_values(), format_func=lambda x: "—" if x is None else f"{x}", key=f"line_{selected_stat}", label_visibility="collapsed")
     if val is not None: lines[selected_stat] = val
 
-with st.sidebar.expander(f"📋 My Board ({len(st.session_state.my_board)})", expanded=len(st.session_state.my_board)>0):
-    if not st.session_state.my_board:
-        st.caption("No props saved. Pin with 📌")
-    else:
-        board_sorted = sorted(st.session_state.my_board, key=lambda x: (get_hitrate_edge(x.get("hitrate_str","")), x.get("timestamp","")), reverse=True)
-        for idx, item in enumerate(board_sorted):
-            orig_idx = st.session_state.my_board.index(item)
-            col1, col2 = st.columns([6,1])
-            with col1:
-                odds_d = f" {item['odds']}" if item.get('odds') else ""
-                st.markdown(f"**{item['player']} • {item['team']}**<br><small>{item['stat']} {item['line']}{odds_d} {item['hitrate_str']}</small>", unsafe_allow_html=True)
-            with col2:
-                if st.button("×", key=f"rm_{idx}"):
-                    st.session_state.my_board.pop(orig_idx)
-                    st.rerun()
+# --- My Board Grouped by Game ---
+st.sidebar.header(f"📋 My Board ({len(st.session_state.my_board)})")
+if not st.session_state.my_board:
+    st.sidebar.caption("No props saved. Pin with 📌")
+else:
+    # 1. Sort global list first (as before)
+    board_sorted = sorted(st.session_state.my_board, key=lambda x: (get_hitrate_edge(x.get("hitrate_str","")), x.get("timestamp","")), reverse=True)
+    
+    # 2. Group by matchup
+    grouped = defaultdict(list)
+    for item in board_sorted:
+        matchup = item.get("matchup", "Other")
+        grouped[matchup].append(item)
+    
+    # 3. Render grouped UI
+    for matchup, props in grouped.items():
+        with st.sidebar.expander(f"🏀 {matchup}", expanded=True):
+            for item in props:
+                col1, col2 = st.columns([6,1])
+                with col1:
+                    odds_d = f" {item['odds']}" if item.get('odds') else ""
+                    st.markdown(f"**{item['player']} • {item['team']}**<br><small>{item['stat']} {item['line']}{odds_d} {item['hitrate_str']}</small>", unsafe_allow_html=True)
+                with col2:
+                    # Find original index to remove correctly
+                    if st.button("×", key=f"rm_{item['player']}_{item['stat']}_{item['timestamp']}"):
+                        st.session_state.my_board = [i for i in st.session_state.my_board if i != item]
+                        st.rerun()
 
 st.sidebar.markdown("---")
 bottom_row = st.sidebar.columns([2, 1])
@@ -255,14 +270,12 @@ df = get_player_games(pid)
 if df.empty: 
     st.stop()
 
-# Multi-stat calculation
 df["Pts+Ast"] = df["PTS"] + df["AST"]
 df["Pts+Reb"] = df["PTS"] + df["REB"]
 df["Ast+Reb"] = df["AST"] + df["REB"]
 df["Stl+Blk"] = df["STL"] + df["BLK"]
 df["PRA"]     = df["PTS"] + df["REB"] + df["AST"]
 
-# ── Filter game log by selected opponent (if any) ──────────────────────────────
 if st.session_state.next_opponent:
     opp = st.session_state.next_opponent
     df_filtered = df[df['MATCHUP'].str.contains(opp)]
@@ -271,9 +284,8 @@ else:
     df_filtered = df
     table_title = f"Recent Game Log (last 15)"
 
-st.markdown("---")  # visual separation
+st.markdown("---")
 
-# Full-width content now (no right column)
 if lines:
     pdata = df.sort_values("GAME_DATE_DT", ascending=False)
     for stat, line in lines.items():
@@ -296,9 +308,13 @@ if lines:
             st.selectbox("Odds", odds_options, key=odds_key, label_visibility="collapsed")
         with c3:
             if st.button("📌", key=f"pin_{stat}"):
+                # Use lookup to find this player's specific matchup today
+                player_matchup = matchup_lookup.get(player_team, "Other/Unknown")
+                
                 entry = {
                     "player": selected_player, 
                     "team": player_team, 
+                    "matchup": player_matchup, # New field for grouping
                     "stat": stat, 
                     "line": f"{line:.1f}", 
                     "odds": st.session_state.get(odds_key, ""), 
@@ -339,7 +355,7 @@ if len(recent_min) >= 3:
     fig_min.update_layout(height=340, showlegend=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="#00e0ff", margin=dict(t=20,b=40,l=30,r=30))
     st.plotly_chart(fig_min, use_container_width=True)
 
-# ── Game Log Table – at the very end ───────────────────────────────────────────
+# ── Game Log Table ─────────────────────────────────────────────────────────────
 with st.expander(f"📊 {table_title}", expanded=False):
     display_cols = ["GAME_DATE", "MATCHUP", "WL", "MIN", "PTS", "REB", "AST", "STL", "BLK", "TOV", "FG3M", "+/-"]
     available_cols = [c for c in display_cols if c in df_filtered.columns]
