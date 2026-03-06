@@ -11,6 +11,15 @@ import plotly.graph_objects as go
 from datetime import datetime, date
 from collections import defaultdict
 
+# ── Season helpers ──────────────────────────────────────────────────────────────
+def get_current_season():
+    today = datetime.today()
+    return f"{today.year}-{str(today.year + 1)[-2:]}" if today.month >= 10 else f"{today.year-1}-{str(today.year)[-2:]}"
+
+CURRENT_SEASON = get_current_season()
+current_year = int(CURRENT_SEASON.split('-')[0])
+PREVIOUS_SEASON = f"{current_year - 1}-{str(current_year)[-2:]}"
+
 st.set_page_config(page_title="ICE PROP LAB", layout="wide", initial_sidebar_state="expanded")
 
 # ── Session state ───────────────────────────────────────────────────────────────
@@ -63,82 +72,29 @@ for g in games_today:
     matchup_lookup[g['away']] = label
     matchup_lookup[g['home']] = label
 
-# ── Game filter dropdown – top of sidebar ──────────────────────────────────────
-st.sidebar.markdown("**Today's Matchups**")
+# ── Sidebar: Game Filter Dropdown (restored) ────────────────────────────────────
+st.sidebar.markdown("### Today's Games")
+game_options = ["— All Players —"]
+game_labels_to_teams = {"— All Players —": None}
 
-if num_games == 0:
-    st.sidebar.caption("No games found today")
-    selected_game = None
+for g in games_today:
+    label = f"{g['away']} @ {g['home']}  ({g['status']})"
+    game_options.append(label)
+    game_labels_to_teams[label] = (g['away'], g['home'])
+
+selected_game_label = st.sidebar.selectbox(
+    "Filter players by game",
+    game_options,
+    index=0,
+    label_visibility="collapsed",
+    key="game_filter_select"
+)
+
+# Set filter_teams based on selection
+if selected_game_label == "— All Players —":
+    st.session_state.filter_teams = None
 else:
-    game_options = ["— All Games —"]
-    game_values  = [None]
-
-    for g in games_today:
-        label = f"{g['away']} @ {g['home']}  •  {g['status']}"
-        game_options.append(label)
-        game_values.append((g['away'], g['home']))
-
-    current_filter = st.session_state.filter_teams
-    default_index = 0
-    if current_filter:
-        try:
-            match_label = f"{current_filter[0]} @ {current_filter[1]}"
-            # Find index matching the label portion
-            for i, opt in enumerate(game_options):
-                if match_label in opt:
-                    default_index = i
-                    break
-        except ValueError:
-            pass
-
-    selected_idx = st.sidebar.selectbox(
-        "Filter by game",
-        options=range(len(game_options)),
-        format_func=lambda i: game_options[i],
-        index=default_index,
-        label_visibility="collapsed",
-        key="game_filter_select"
-    )
-
-    selected_game = game_values[selected_idx]
-
-    if selected_game is None:
-        if st.session_state.filter_teams is not None:
-            st.session_state.filter_teams = None
-            st.session_state.next_opponent = None
-    else:
-        away, home = selected_game
-        if st.session_state.filter_teams != (away, home):
-            st.session_state.filter_teams = (away, home)
-            st.session_state.next_opponent = home
-
-if st.session_state.filter_teams:
-    a, h = st.session_state.filter_teams
-    st.sidebar.caption(f"Active filter: **{a} @ {h}**")
-else:
-    st.sidebar.caption(f"{num_games} game{'s' if num_games != 1 else ''} today" if num_games > 0 else "No games scheduled")
-
-st.sidebar.markdown("---")
-
-# ── Season helpers ──────────────────────────────────────────────────────────────
-def get_current_season():
-    today = datetime.today()
-    return f"{today.year}-{str(today.year + 1)[-2:]}" if today.month >= 10 else f"{today.year-1}-{str(today.year)[-2:]}"
-
-CURRENT_SEASON = get_current_season()
-current_year = int(CURRENT_SEASON.split('-')[0])
-PREVIOUS_SEASON = f"{current_year - 1}-{str(current_year)[-2:]}"
-
-# ── Styling ─────────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-    .main {background: linear-gradient(135deg, #0a1a2f 0%, #001122 100%);}
-    h1, h2, h3 {font-family: 'Exo 2', sans-serif; color: #00e0ff !important; text-shadow: 0 0 20px #00e0ff;}
-    .stButton>button {background: linear-gradient(45deg, #003366, #00aaff) !important; color: white !important; border: 1px solid #00e0ff !important; font-weight: 700; border-radius: 8px;}
-    .hit-box {background:rgba(10,30,60,0.7); padding:10px; border-radius:10px; border:1px solid #00aaff; margin-bottom:12px;}
-    .highlight-stat {background: rgba(0, 180, 120, 0.18); padding: 6px 10px; border-radius: 6px; border-left: 4px solid #00cc88;}
-</style>
-""", unsafe_allow_html=True)
+    st.session_state.filter_teams = game_labels_to_teams[selected_game_label]
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
 def dropdown_values():
@@ -156,6 +112,34 @@ def get_hitrate_edge(hitrate_str: str) -> float:
         o_pct = float(avg_part.split("O ")[1].split("%")[0].strip())
         return max(o_pct, 100 - o_pct) - 50
     except: return 0.0
+
+def calculate_return_on_dollar(odds_str: str) -> float:
+    if not odds_str or odds_str.strip() == "":
+        return 0.0
+    try:
+        odds = float(odds_str.strip().replace('+', ''))
+        if odds > 0:
+            return odds / 100.0
+        elif odds < 0:
+            return 100.0 / abs(odds)
+        else:
+            return 0.0
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+
+def calculate_decimal_odds(odds_str: str) -> float:
+    """Converts American odds to decimal multiplier (e.g., -110 -> 1.91)"""
+    if not odds_str or odds_str.strip() == "":
+        return 1.0
+    try:
+        odds = float(odds_str.strip().replace('+', ''))
+        if odds > 0:
+            return (odds / 100.0) + 1.0
+        elif odds < 0:
+            return (100.0 / abs(odds)) + 1.0
+        return 1.0
+    except (ValueError, ZeroDivisionError):
+        return 1.0
 
 @st.cache_data(ttl=7200)
 def get_active_players_with_teams():
@@ -180,27 +164,33 @@ def get_player_games(pid):
         except: continue
     return pd.DataFrame()
 
-# ── Load and Filter Player List ────────────────────────────────────────────────
+# ── Load and Filter Player List (now respects game filter) ──────────────────────
 player_team_map = get_active_players_with_teams()
 player_options = []
+
 for p in players.get_players():
     pid_str = str(p["id"])
-    if pid_str in player_team_map:
-        team = player_team_map[pid_str]
-        if st.session_state.filter_teams and team not in st.session_state.filter_teams: 
+    if pid_str not in player_team_map:
+        continue
+    team = player_team_map[pid_str]
+    
+    # Apply game filter if one is selected
+    if st.session_state.filter_teams is not None:
+        if team not in st.session_state.filter_teams:
             continue
-        player_options.append((f"{p['full_name']} • {team}", p['full_name']))
+    
+    player_options.append((f"{p['full_name']} • {team}", p['full_name']))
 
 player_options.sort(key=lambda x: x[1].lower())
 player_list_display = [opt[0] for opt in player_options]
-player_list_clean = [opt[1] for opt in player_options]
+player_list_clean   = [opt[1] for opt in player_options]
 
 common_teams = ["— Any —"] + sorted(['ATL','BOS','BKN','CHA','CHI','CLE','DAL','DEN','DET','GSW','HOU','IND','LAC','LAL','MEM','MIA','MIL','MIN','NOP','NYK','OKC','ORL','PHI','PHX','POR','SAC','SAS','TOR','UTA','WAS'])
 
 available_stats = ['PTS', 'REB', 'AST', 'STL', 'BLK', 'TOV', 'FGM', 'FGA', 'FG3M', 'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast', 'Ast+Reb', 'Stl+Blk', 'PRA']
-odds_options = ["", "-300", "-275", "-250", "-225", "-200", "-190", "-180", "-170", "-160", "-155", "-150", "-145", "-140", "-135", "-130", "-125", "-120", "-115", "-110", "-105", "-100", "+100", "+105", "+110", "+115", "+118", "+120", "+125", "+130", "+135", "+140", "+145", "+150", "+155", "+160", "+165", "+170", "+175", "+180", "+185", "+190", "+195", "+200", "+210", "+220", "+230", "+240", "+250", "+275", "+300"]
+odds_options = ["", "-300", "-275", "-250","-245","-240","-235","-230", "-225", "-200", "-190", "-180", "-170", "-160", "-155", "-150", "-145", "-140", "-135", "-130", "-125", "-120", "-115", "-112" ,"-110", "-105", "-100", "+100", "+105", "+110", "+115", "+118", "+120", "+125", "+130", "+135", "+140", "+145", "+150", "+155", "+160", "+165", "+170", "+175", "+180", "+185", "+190", "+195", "+200", "+210", "+220", "+230", "+240", "+250", "+275", "+300"]
 
-# ── Sidebar ─────────────────────────────────────────────────────────────────────
+# ── Sidebar: Player / Stat / Opponent ───────────────────────────────────────────
 top_row = st.sidebar.columns([3, 2, 2])
 with top_row[0]:
     selected_display = st.selectbox("Player", ["— Choose player —"] + player_list_display, key="player_select", label_visibility="collapsed")
@@ -230,19 +220,44 @@ st.sidebar.header(f"📋 My Board ({len(st.session_state.my_board)})")
 if not st.session_state.my_board:
     st.sidebar.caption("No props saved. Pin with 📌")
 else:
-    board_sorted = sorted(st.session_state.my_board, key=lambda x: (get_hitrate_edge(x.get("hitrate_str","")), x.get("timestamp","")), reverse=True)
+    board_sorted = sorted(
+        st.session_state.my_board,
+        key=lambda x: (get_hitrate_edge(x.get("hitrate_str","")), x.get("timestamp","")),
+        reverse=True
+    )
+    
     grouped = defaultdict(list)
     for item in board_sorted:
-        matchup = item.get("matchup", "Other")
+        matchup = item.get("matchup", "Other/Unknown")
         grouped[matchup].append(item)
     
     for matchup, props in grouped.items():
-        with st.sidebar.expander(f"🏀 {matchup}", expanded=True):
+        # Calculate parlay return (multiplicative)
+        total_multiplier = 1.0
+        for p in props:
+            total_multiplier *= calculate_decimal_odds(p.get('odds', ''))
+        group_return = total_multiplier - 1.0
+        
+        if group_return > 0:
+            return_display = f"+${group_return:.2f}"
+            return_color = "#00ff88"
+        elif group_return < 0:
+            return_display = f"-${abs(group_return):.2f}"
+            return_color = "#ff5555"
+        else:
+            return_display = "$0.00"
+            return_color = "#15D66D"
+        
+        with st.sidebar.expander(f"🏀 {matchup} | :green[{return_display}]", expanded=True):
             for item in props:
                 col1, col2 = st.columns([6,1])
                 with col1:
                     odds_d = f" {item['odds']}" if item.get('odds') else ""
-                    st.markdown(f"**{item['player']} • {item['team']}**<br><small>{item['stat']} {item['line']}{odds_d} {item['hitrate_str']}</small>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"**{item['player']} • {item['team']}**<br>"
+                        f"<small>{item['stat']} {item['line']}{odds_d} {item['hitrate_str']}</small>",
+                        unsafe_allow_html=True
+                    )
                 with col2:
                     if st.button("×", key=f"rm_{item['player']}_{item['stat']}_{item['timestamp']}"):
                         st.session_state.my_board = [i for i in st.session_state.my_board if i != item]
@@ -257,21 +272,18 @@ with bottom_row[1]:
         st.cache_data.clear()
         st.rerun()
 
-# ── Data Management (Bottom) ──────────────────────────────────────────────────
+# ── Data Management ─────────────────────────────────────────────────────────────
 st.sidebar.markdown("### 💾 Data Management")
 
 def get_board_json():
-    # Helper to serialize timestamps to ISO strings
     data = []
     for entry in st.session_state.my_board:
         item = entry.copy()
-        # Ensure timestamp is string for JSON
         if isinstance(item.get('timestamp'), datetime):
             item['timestamp'] = item['timestamp'].isoformat()
         data.append(item)
     return json.dumps(data)
 
-# Create a dynamic filename: board_YYYYMMDD_HHMM.json
 dynamic_filename = f"board_{datetime.now().strftime('%Y%m%d_%H%M')}.json"
 
 st.sidebar.download_button(
@@ -285,7 +297,6 @@ uploaded_file = st.sidebar.file_uploader("Upload Board", type="json")
 if uploaded_file is not None:
     try:
         data = json.load(uploaded_file)
-        # Convert the ISO string back into a datetime object for each entry
         for entry in data:
             if isinstance(entry.get('timestamp'), str):
                 entry['timestamp'] = datetime.fromisoformat(entry['timestamp'])
@@ -321,51 +332,118 @@ else:
 
 st.markdown("---")
 
+# ... (rest of the main content remains unchanged: hit rates, charts, minutes projection, game log expander, footer)
+
 if lines:
-    pdata = df.sort_values("GAME_DATE_DT", ascending=False)
+    pdata = df.sort_values("GAME_DATE_DT", ascending=False).copy()
+    
+    selected_n = games_to_show
+    
+    if selected_n == 5:
+        windows = [5]
+    elif selected_n == 10:
+        windows = [5, 10]
+    elif selected_n == 15:
+        windows = [5, 10, 15]
+    else:
+        windows = [5, 10, 15, selected_n]
+    
+    windows = [w for w in windows if len(pdata) >= w]
+    
     for stat, line in lines.items():
         over_list = []
-        for w in [5,10,15]:
-            if len(pdata) >= w: 
-                over_list.append((pdata.head(w)[stat] > line).mean() * 100)
+        window_labels = []
         
-        parts = [f"<span style='color:{('#00ff88' if p > 73 else '#ffcc00' if p >= 60 else '#ff5555')}'>{p:.0f}%</span>" for p in over_list]
-        hit_str = " | ".join(parts)
-        avg_o = np.mean(over_list)
-        avg_u = 100 - avg_o
-        avg_text = f" — AVG: <span style='color:{('#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555')}'>O {avg_o:.0f}%</span> / <span style='color:{('#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555')}'>U {avg_u:.0f}%</span>"
+        for w in windows:
+            recent_w = pdata.head(w)
+            hit_pct = (recent_w[stat] > line).mean() * 100
+            over_list.append(hit_pct)
+            window_labels.append(f"L{w}")
+        
+        if over_list:
+            parts = []
+            for pct, lbl in zip(over_list, window_labels):
+                color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
+                parts.append(f"<span style='color:{color}'>{pct:.0f}%</span> ({lbl})")
+            
+            hit_str = " | ".join(parts)
+            
+            avg_o = np.mean(over_list)
+            avg_u = 100 - avg_o
+            avg_color_o = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
+            avg_color_u = '#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555'
+            avg_text = (
+                f" — AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / "
+                f"<span style='color:{avg_color_u}'>U {avg_u:.0f}%</span>"
+            )
+        else:
+            hit_str = "No data"
+            avg_text = ""
         
         c1, c2, c3 = st.columns([6, 3, 1])
-        with c1: 
-            st.markdown(f"<div class='hit-box'><strong>{stat} {line}</strong> {hit_str}{avg_text}</div>", unsafe_allow_html=True)
-        with c2: 
+        with c1:
+            st.markdown(
+                f"<div class='hit-box'><strong>{stat} {line}</strong> {hit_str}{avg_text}</div>",
+                unsafe_allow_html=True
+            )
+        with c2:
             odds_key = f"odds_{selected_player}_{stat}"
             st.selectbox("Odds", odds_options, key=odds_key, label_visibility="collapsed")
         with c3:
-            if st.button("📌", key=f"pin_{stat}"):
+            if st.button("📌", key=f"pin_{stat}_{line}"):
                 player_matchup = matchup_lookup.get(player_team, "Other/Unknown")
-                
                 entry = {
-                    "player": selected_player, 
-                    "team": player_team, 
+                    "player": selected_player,
+                    "team": player_team,
                     "matchup": player_matchup,
-                    "stat": stat, 
-                    "line": f"{line:.1f}", 
-                    "odds": st.session_state.get(odds_key, ""), 
-                    "hitrate_str": hit_str + avg_text, 
+                    "stat": stat,
+                    "line": f"{line:.1f}",
+                    "odds": st.session_state.get(odds_key, ""),
+                    "hitrate_str": hit_str + avg_text,
                     "timestamp": datetime.now()
                 }
-                if not any(e['player']==entry['player'] and e['stat']==entry['stat'] and e['line']==entry['line'] for e in st.session_state.my_board):
+                if not any(
+                    e['player'] == entry['player'] and
+                    e['stat'] == entry['stat'] and
+                    e['line'] == entry['line']
+                    for e in st.session_state.my_board
+                ):
                     st.session_state.my_board.append(entry)
-                    st.toast(f"Pinned {selected_player}", icon="📌")
+                    st.toast(f"Pinned {selected_player} • {stat} {line}", icon="📌")
                     st.rerun()
 
-        fig = go.Figure()
-        colors = ["#00ff88" if v > line else "#ff4444" for v in df.head(15)[stat]]
-        fig.add_trace(go.Bar(x=df.head(15)["GAME_DATE"], y=df.head(15)[stat], marker_color=colors, text=df.head(15)[stat].round(1), textposition="inside"))
-        fig.add_hline(y=line, line_dash="dash", line_color="#00ffff")
-        fig.update_layout(height=280, margin=dict(t=10,b=10), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="#00e0ff")
-        st.plotly_chart(fig, use_container_width=True)
+        if len(pdata) > 0:
+            n = min(games_to_show, len(pdata))
+            recent_data = pdata.head(n)
+            
+            fig = go.Figure()
+            colors = ["#00ff88" if v > line else "#ff4444" for v in recent_data[stat]]
+            text_colors = ["#000" if val > 10 else "#fff" for val in recent_data[stat]]
+            
+            fig.add_trace(go.Bar(
+                x=recent_data["GAME_DATE"],
+                y=recent_data[stat],
+                marker_color=colors,
+                text=recent_data[stat].round(1),
+                textposition="inside",
+                textfont={"color": text_colors}
+            ))
+            
+            fig.add_hline(y=line, line_dash="dash", line_color="#00ffff",
+                          annotation_text=f"line = {line}", annotation_position="top right")
+            
+            fig.update_layout(
+                title=f"{stat} — Last {n} game{'s' if n != 1 else ''}",
+                height=300,
+                margin=dict(t=50, b=40, l=20, r=20),
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font_color="#00e0ff",
+                xaxis_title="Game Date",
+                yaxis_title=stat,
+                bargap=0.15
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
 recent_min = df.head(games_to_show)
 if len(recent_min) >= 3:
