@@ -244,7 +244,7 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
                 avg_color_o = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
                 avg_color_u = '#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555'
                 avg_text = (
-                    f" — AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / "
+                    f" AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / "
                     f"<span style='color:{avg_color_u}'>U {avg_u:.0f}%</span>"
                 )
                 hitrate_str = hit_str + avg_text
@@ -435,7 +435,7 @@ if lines:
             avg_color_o = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
             avg_color_u = '#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555'
             avg_text = (
-                f" — AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / "
+                f" AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / "
                 f"<span style='color:{avg_color_u}'>U {avg_u:.0f}%</span>"
             )
         else:
@@ -516,4 +516,5 @@ with st.expander(f"📊 {table_title}", expanded=False):
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
 st.markdown("<p style='text-align:center; color:#88f0ff; padding-top:2rem;'>ICE PROP LAB • 2025-26</p>", unsafe_allow_html=True)
+
 
