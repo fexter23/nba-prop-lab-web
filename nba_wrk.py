@@ -180,8 +180,20 @@ selected_player = next((clean for disp, clean in player_options if disp == selec
 pid = get_player_id(selected_player) if selected_player else None
 player_team = player_team_map.get(str(pid), "???") if pid else "???"
 
+# ── Load game log EARLY so it's available for pin calculation ────────────────
+df = None
+if pid:
+    df = get_player_games(pid)
+    if not df.empty:
+        df["Pts+Ast"] = df["PTS"] + df["AST"]
+        df["Pts+Reb"] = df["PTS"] + df["REB"]
+        df["Ast+Reb"] = df["AST"] + df["REB"]
+        df["Stl+Blk"] = df["STL"] + df["BLK"]
+        df["PRA"]     = df["PTS"] + df["REB"] + df["AST"]
+
+# ── Lines & Pin logic ───────────────────────────────────────────────────────────
 lines = {}
-if selected_stat and selected_stat != "— Select stat —":
+if selected_stat and selected_stat != "— Select stat —" and df is not None and not df.empty:
     st.sidebar.markdown(f"**{selected_stat} line**")
     line_col, odds_col = st.sidebar.columns(2)
     with line_col:
@@ -190,36 +202,85 @@ if selected_stat and selected_stat != "— Select stat —":
     with odds_col:
         odds_key = f"odds_{selected_player}_{selected_stat}"
         st.selectbox("Odds", odds_options, key=odds_key, label_visibility="collapsed")
+
+    # Pin button + immediate hitrate calculation
     if st.sidebar.button("📌", key=f"pin_{selected_stat}_{lines.get(selected_stat, '')}", use_container_width=True):
-        player_matchup = matchup_lookup.get(player_team, "Other/Unknown")
-        entry = {
-            "player": selected_player,
-            "team": player_team,
-            "matchup": player_matchup,
-            "stat": selected_stat,
-            "line": f"{lines[selected_stat]:.1f}" if selected_stat in lines else "",
-            "odds": st.session_state.get(odds_key, ""),
-            "hitrate_str": "",
-            "timestamp": datetime.now()
-        }
-        if not any(
-            e['player'] == entry['player'] and
-            e['stat'] == entry['stat'] and
-            e['line'] == entry['line']
-            for e in st.session_state.my_board
-        ):
-            st.session_state.my_board.append(entry)
-            st.rerun()
+        if selected_stat not in lines:
+            st.warning("No line selected")
+        else:
+            line = lines[selected_stat]
+
+            # Calculate hit rate string RIGHT NOW using the pre-loaded df
+            pdata = df.sort_values("GAME_DATE_DT", ascending=False).copy()
+            selected_n = st.session_state.get('games_to_show', 10)  # fallback to default
+            if selected_n == 5:
+                windows = [5]
+            elif selected_n == 10:
+                windows = [5, 10]
+            elif selected_n == 15:
+                windows = [5, 10, 15]
+            else:
+                windows = [5, 10, 15, selected_n]
+            windows = [w for w in windows if len(pdata) >= w]
+
+            over_list = []
+            window_labels = []
+            for w in windows:
+                recent_w = pdata.head(w)
+                hit_pct = (recent_w[selected_stat] > line).mean() * 100
+                over_list.append(hit_pct)
+                #window_labels.append(f"L{w}")
+
+            if over_list:
+                parts = []
+                for pct, lbl in zip(over_list, window_labels):
+                    color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
+                    parts.append(f"<span style='color:{color}'>{pct:.0f}%</span> ({lbl})")
+                
+                hit_str = " | ".join(parts)
+                
+                avg_o = np.mean(over_list)
+                avg_u = 100 - avg_o
+                avg_color_o = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
+                avg_color_u = '#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555'
+                avg_text = (
+                    f" — AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / "
+                    f"<span style='color:{avg_color_u}'>U {avg_u:.0f}%</span>"
+                )
+                hitrate_str = hit_str + avg_text
+            else:
+                hitrate_str = "No data"
+
+            player_matchup = matchup_lookup.get(player_team, "Other/Unknown")
+            entry = {
+                "player": selected_player,
+                "team": player_team,
+                "matchup": player_matchup,
+                "stat": selected_stat,
+                "line": f"{line:.1f}",
+                "odds": st.session_state.get(odds_key, ""),
+                "hitrate_str": hitrate_str,
+                "timestamp": datetime.now()
+            }
+
+            if not any(
+                e['player'] == entry['player'] and
+                e['stat'] == entry['stat'] and
+                e['line'] == entry['line']
+                for e in st.session_state.my_board
+            ):
+                st.session_state.my_board.append(entry)
+                st.toast(f"Pinned → {selected_player} • {selected_stat} {line}", icon="📌")
+                st.rerun()
 
 # --- My Dashboard (checkbox left, X right) ---
-st.sidebar.header("📋 My Dashboard")
+
 if st.session_state.my_board:
     dash_df = pd.DataFrame(st.session_state.my_board)
     dash_df['match_key'] = dash_df['matchup']
     
     for match, group in dash_df.groupby('match_key'):
-        # Calculate parlay return on $1 bet
-        total_ret = 0.0
+        total_payout = 1.0  # total return (stake + profit)
         try:
             multiplier = 1.0
             for _, row in group.iterrows():
@@ -230,13 +291,12 @@ if st.session_state.my_board:
                     multiplier *= (val / 100 + 1)
                 else:
                     multiplier *= (100 / abs(val) + 1)
-            total_ret = multiplier - 1.0
+            total_payout = multiplier
         except:
-            total_ret = 0.0
+            total_payout = 1.0
 
         prop_count = len(group)
 
-        # Three columns: checkbox | expander | X
         col_left, col_middle, col_right = st.sidebar.columns([0.12, 0.76, 0.12])
 
         with col_left:
@@ -244,7 +304,7 @@ if st.session_state.my_board:
 
         with col_middle:
             with st.expander(
-                f"🏀 {match} | :green[Return ${total_ret:+.2f}] | ({prop_count})",
+                f"🏀 {match} | :green[${total_payout:.2f}] | ({prop_count})",
                 expanded=True
             ):
                 group_sorted = group.sort_values(by='timestamp', ascending=False)
@@ -254,8 +314,8 @@ if st.session_state.my_board:
                     with col_t:
                         odds_d = f" @ **{entry['odds']}**" if entry.get('odds') else ""
                         st.markdown(
-                            f"**{entry['player']} • {entry['team']}**<br>"
-                            f"> {entry['stat']} {entry['line']}{odds_d}<br>"
+                            f"**{entry['player']} • {entry['team']}**"
+                            f" | > {entry['stat']} {entry['line']}{odds_d}<br>"
                             f"<small>{entry.get('hitrate_str', '—')}</small>",
                             unsafe_allow_html=True
                         )
@@ -293,6 +353,7 @@ with bottom_row[1]:
 
 # ── Data Management ─────────────────────────────────────────────────────────────
 
+
 def get_board_json():
     data = []
     for entry in st.session_state.my_board:
@@ -326,19 +387,9 @@ if uploaded_file is not None:
         st.sidebar.error(f"Error loading file: {e}")
 
 # ── Main content ────────────────────────────────────────────────────────────────
-if not selected_player:
-    st.info("Select a player from the sidebar.")
+if not selected_player or df is None or df.empty:
+    st.info("Select a player from the sidebar or no data available.")
     st.stop()
-
-df = get_player_games(pid)
-if df.empty: 
-    st.stop()
-
-df["Pts+Ast"] = df["PTS"] + df["AST"]
-df["Pts+Reb"] = df["PTS"] + df["REB"]
-df["Ast+Reb"] = df["AST"] + df["REB"]
-df["Stl+Blk"] = df["STL"] + df["BLK"]
-df["PRA"]     = df["PTS"] + df["REB"] + df["AST"]
 
 df_filtered = df
 table_title = f"Recent Game Log (last 15)"
@@ -369,7 +420,7 @@ if lines:
             recent_w = pdata.head(w)
             hit_pct = (recent_w[stat] > line).mean() * 100
             over_list.append(hit_pct)
-            window_labels.append(f"L{w}")
+            #window_labels.append(f"L{w}")
         
         if over_list:
             parts = []
@@ -395,10 +446,6 @@ if lines:
             f"<div class='hit-box'><strong>{stat} {line}</strong> {hit_str}{avg_text}</div>",
             unsafe_allow_html=True
         )
-
-        for entry in st.session_state.my_board:
-            if entry['player'] == selected_player and entry['stat'] == stat and entry['line'] == f"{line:.1f}":
-                entry['hitrate_str'] = hit_str + avg_text
 
         if len(pdata) > 0:
             n = min(games_to_show, len(pdata))
