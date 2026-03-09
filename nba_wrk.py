@@ -25,8 +25,6 @@ st.set_page_config(page_title="ICE PROP LAB", layout="wide", initial_sidebar_sta
 # ── Session state ───────────────────────────────────────────────────────────────
 if 'my_board' not in st.session_state:
     st.session_state.my_board = []
-if 'next_opponent' not in st.session_state:
-    st.session_state.next_opponent = None
 if 'filter_teams' not in st.session_state:
     st.session_state.filter_teams = None 
 
@@ -72,7 +70,7 @@ for g in games_today:
     matchup_lookup[g['away']] = label
     matchup_lookup[g['home']] = label
 
-# ── Sidebar: Game Filter Dropdown (restored) ────────────────────────────────────
+# ── Sidebar: Game Filter Dropdown ───────────────────────────────────────────────
 st.sidebar.markdown("### Today's Games")
 game_options = ["— All Players —"]
 game_labels_to_teams = {"— All Players —": None}
@@ -90,7 +88,6 @@ selected_game_label = st.sidebar.selectbox(
     key="game_filter_select"
 )
 
-# Set filter_teams based on selection
 if selected_game_label == "— All Players —":
     st.session_state.filter_teams = None
 else:
@@ -113,22 +110,7 @@ def get_hitrate_edge(hitrate_str: str) -> float:
         return max(o_pct, 100 - o_pct) - 50
     except: return 0.0
 
-def calculate_return_on_dollar(odds_str: str) -> float:
-    if not odds_str or odds_str.strip() == "":
-        return 0.0
-    try:
-        odds = float(odds_str.strip().replace('+', ''))
-        if odds > 0:
-            return odds / 100.0
-        elif odds < 0:
-            return 100.0 / abs(odds)
-        else:
-            return 0.0
-    except (ValueError, ZeroDivisionError):
-        return 0.0
-
 def calculate_decimal_odds(odds_str: str) -> float:
-    """Converts American odds to decimal multiplier (e.g., -110 -> 1.91)"""
     if not odds_str or odds_str.strip() == "":
         return 1.0
     try:
@@ -164,7 +146,7 @@ def get_player_games(pid):
         except: continue
     return pd.DataFrame()
 
-# ── Load and Filter Player List (now respects game filter) ──────────────────────
+# ── Load and Filter Player List ─────────────────────────────────────────────────
 player_team_map = get_active_players_with_teams()
 player_options = []
 
@@ -174,7 +156,6 @@ for p in players.get_players():
         continue
     team = player_team_map[pid_str]
     
-    # Apply game filter if one is selected
     if st.session_state.filter_teams is not None:
         if team not in st.session_state.filter_teams:
             continue
@@ -185,25 +166,15 @@ player_options.sort(key=lambda x: x[1].lower())
 player_list_display = [opt[0] for opt in player_options]
 player_list_clean   = [opt[1] for opt in player_options]
 
-common_teams = ["— Any —"] + sorted(['ATL','BOS','BKN','CHA','CHI','CLE','DAL','DEN','DET','GSW','HOU','IND','LAC','LAL','MEM','MIA','MIL','MIN','NOP','NYK','OKC','ORL','PHI','PHX','POR','SAC','SAS','TOR','UTA','WAS'])
+available_stats = ['PTS', 'REB', 'AST', 'STL', 'BLK', 'TOV', 'FGM', 'FGA', 'FG3M', 'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast', 'Ast+Reb', 'Stl+Blk', 'PRA']
+odds_options = ["", "-300", "-275", "-250","-245","-240","-235","-230", "-225", "-200", "-190", "-180", "-170", "-160", "-155", "-150", "-145", "-140", "-135", "-130", "-125", "-120", "-115", "-112" ,"-110", "-105", "-100", "+100", "+105", "+110", "+115", "+118", "+120", "+125", "+130", "+135", "+140", "+145", "+150", "+155", "+160", "+165", "+170", "+175", "+180", "+185", "+190", "+195", "+200", "+210", "+220", "+230", "+240", "+250", "+275", "+300"]
 
-available_stats = ['PTS', 'FG3M' , 'AST', 'REB', 'PRA','Ast+Reb', 'STL', 'BLK', 'TOV', 'FGM', 'FGA',  'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast', 'Stl+Blk' ]
-odds_options = ["", "-300", "-275", "-250","-245","-240","-235","-230", "-225", "-210","-200", "-190", "-185","-180", "-175","-170", "-165","-160", "-155", "-150", "-145", "-140", "-135", "-130", "-125", "-120", "-115", "-112" ,"-110", "-105", "-100", "+100", "+105", "+110", "+115", "+118", "+120", "+125", "+130", "+135", "+140", "+145", "+150", "+155", "+160", "+165", "+170", "+175", "+180", "+185", "+190", "+195", "+200", "+210", "+220", "+230", "+240", "+250", "+275", "+300"]
-
-# ── Sidebar: Player / Stat / Opponent ───────────────────────────────────────────
-top_row = st.sidebar.columns([3, 2, 2])
+# ── Sidebar: Player / Stat ──────────────────────────────────────────────────────
+top_row = st.sidebar.columns([3, 2])
 with top_row[0]:
     selected_display = st.selectbox("Player", ["— Choose player —"] + player_list_display, key="player_select", label_visibility="collapsed")
 with top_row[1]:
     selected_stat = st.selectbox("Stat", ["— Select stat —"] + available_stats, index=1, key="stat_select", label_visibility="collapsed")
-with top_row[2]:
-    default_opp_idx = 0
-    if st.session_state.next_opponent and st.session_state.next_opponent in common_teams:
-        default_opp_idx = common_teams.index(st.session_state.next_opponent)
-    
-    next_opp = st.selectbox("Opponent", common_teams, index=default_opp_idx, key="opp_select", label_visibility="collapsed")
-
-st.session_state.next_opponent = None if next_opp == "— Any —" else next_opp
 
 selected_player = next((clean for disp, clean in player_options if disp == selected_display), None)
 pid = get_player_id(selected_player) if selected_player else None
@@ -212,61 +183,109 @@ player_team = player_team_map.get(str(pid), "???") if pid else "???"
 lines = {}
 if selected_stat and selected_stat != "— Select stat —":
     st.sidebar.markdown(f"**{selected_stat} line**")
-    val = st.sidebar.selectbox(f"{selected_stat} line", dropdown_values(), format_func=lambda x: "—" if x is None else f"{x}", key=f"line_{selected_stat}", label_visibility="collapsed")
-    if val is not None: lines[selected_stat] = val
+    line_col, odds_col = st.sidebar.columns(2)
+    with line_col:
+        val = st.selectbox(f"{selected_stat} line", dropdown_values(), format_func=lambda x: "—" if x is None else f"{x}", key=f"line_{selected_stat}", label_visibility="collapsed")
+        if val is not None: lines[selected_stat] = val
+    with odds_col:
+        odds_key = f"odds_{selected_player}_{selected_stat}"
+        st.selectbox("Odds", odds_options, key=odds_key, label_visibility="collapsed")
+    if st.sidebar.button("📌", key=f"pin_{selected_stat}_{lines.get(selected_stat, '')}", use_container_width=True):
+        player_matchup = matchup_lookup.get(player_team, "Other/Unknown")
+        entry = {
+            "player": selected_player,
+            "team": player_team,
+            "matchup": player_matchup,
+            "stat": selected_stat,
+            "line": f"{lines[selected_stat]:.1f}" if selected_stat in lines else "",
+            "odds": st.session_state.get(odds_key, ""),
+            "hitrate_str": "",
+            "timestamp": datetime.now()
+        }
+        if not any(
+            e['player'] == entry['player'] and
+            e['stat'] == entry['stat'] and
+            e['line'] == entry['line']
+            for e in st.session_state.my_board
+        ):
+            st.session_state.my_board.append(entry)
+            st.rerun()
 
-# --- My Board Grouped by Game ---
-st.sidebar.header(f"📋 My Board ({len(st.session_state.my_board)})")
-if not st.session_state.my_board:
-    st.sidebar.caption("No props saved. Pin with 📌")
+# --- My Dashboard (checkbox left, X right) ---
+st.sidebar.header("📋 My Dashboard")
+if st.session_state.my_board:
+    dash_df = pd.DataFrame(st.session_state.my_board)
+    dash_df['match_key'] = dash_df['matchup']
+    
+    for match, group in dash_df.groupby('match_key'):
+        # Calculate parlay return on $1 bet
+        total_ret = 0.0
+        try:
+            multiplier = 1.0
+            for _, row in group.iterrows():
+                o = row['odds']
+                if not o or o.strip() == "": continue
+                val = float(str(o).replace('+', ''))
+                if val > 0:
+                    multiplier *= (val / 100 + 1)
+                else:
+                    multiplier *= (100 / abs(val) + 1)
+            total_ret = multiplier - 1.0
+        except:
+            total_ret = 0.0
+
+        prop_count = len(group)
+
+        # Three columns: checkbox | expander | X
+        col_left, col_middle, col_right = st.sidebar.columns([0.12, 0.76, 0.12])
+
+        with col_left:
+            st.checkbox("", key=f"check_{match}", label_visibility="collapsed")
+
+        with col_middle:
+            with st.expander(
+                f"🏀 {match} | :green[Return ${total_ret:+.2f}] | ({prop_count})",
+                expanded=True
+            ):
+                group_sorted = group.sort_values(by='timestamp', ascending=False)
+                
+                for _, entry in group_sorted.iterrows():
+                    col_t, col_d = st.columns([0.8, 0.2])
+                    with col_t:
+                        odds_d = f" @ **{entry['odds']}**" if entry.get('odds') else ""
+                        st.markdown(
+                            f"**{entry['player']} • {entry['team']}**<br>"
+                            f"> {entry['stat']} {entry['line']}{odds_d}<br>"
+                            f"<small>{entry.get('hitrate_str', '—')}</small>",
+                            unsafe_allow_html=True
+                        )
+                    with col_d:
+                        if st.button("🗑️", key=f"del_{entry['player']}_{entry['stat']}_{entry.get('timestamp','')}"):
+                            st.session_state.my_board = [
+                                d for d in st.session_state.my_board
+                                if not (d['player'] == entry['player'] and 
+                                        d['stat'] == entry['stat'] and 
+                                        d['line'] == entry['line'])
+                            ]
+                            st.rerun()
+
+        with col_right:
+            if st.button("x", key=f"del_group_{match}", help="Delete entire group"):
+                st.session_state.my_board = [
+                    d for d in st.session_state.my_board
+                    if d['matchup'] != match
+                ]
+                st.rerun()
+
 else:
-    board_sorted = sorted(
-        st.session_state.my_board,
-        key=lambda x: (get_hitrate_edge(x.get("hitrate_str","")), x.get("timestamp","")),
-        reverse=True
-    )
-    
-    grouped = defaultdict(list)
-    for item in board_sorted:
-        matchup = item.get("matchup", "Other/Unknown")
-        grouped[matchup].append(item)
-    
-    for matchup, props in grouped.items():
-        # Calculate parlay return (multiplicative)
-        total_multiplier = 1.0
-        for p in props:
-            total_multiplier *= calculate_decimal_odds(p.get('odds', ''))
-        group_return = total_multiplier - 1.0
-        
-        if group_return > 0:
-            return_display = f"+${group_return:.2f}"
-            return_color = "#00ff88"
-        elif group_return < 0:
-            return_display = f"-${abs(group_return):.2f}"
-            return_color = "#ff5555"
-        else:
-            return_display = "$0.00"
-            return_color = "#15D66D"
-        
-        with st.sidebar.expander(f"🏀 {matchup} | :green[{return_display}]", expanded=True):
-            for item in props:
-                col1, col2 = st.columns([6,1])
-                with col1:
-                    odds_d = f" {item['odds']}" if item.get('odds') else ""
-                    st.markdown(
-                        f"**{item['player']} • {item['team']}**<br>"
-                        f"<small>{item['stat']} {item['line']}{odds_d} {item['hitrate_str']}</small>",
-                        unsafe_allow_html=True
-                    )
-                with col2:
-                    if st.button("×", key=f"rm_{item['player']}_{item['stat']}_{item['timestamp']}"):
-                        st.session_state.my_board = [i for i in st.session_state.my_board if i != item]
-                        st.rerun()
+    st.sidebar.caption("No props saved. Pin with 📌")
 
-st.sidebar.markdown("---")
+st.sidebar.divider()
+
+# ── Recent games selector & refresh ─────────────────────────────────────────────
 bottom_row = st.sidebar.columns([2, 1])
 with bottom_row[0]: 
-    games_to_show = st.selectbox("Recent games", [5,10,15,20], index=2, label_visibility="collapsed")
+    games_to_show = st.selectbox("Recent games", [5,10,15,20], index=1, label_visibility="collapsed")
 with bottom_row[1]:
     if st.button("🔄"): 
         st.cache_data.clear()
@@ -322,17 +341,10 @@ df["Ast+Reb"] = df["AST"] + df["REB"]
 df["Stl+Blk"] = df["STL"] + df["BLK"]
 df["PRA"]     = df["PTS"] + df["REB"] + df["AST"]
 
-if st.session_state.next_opponent:
-    opp = st.session_state.next_opponent
-    df_filtered = df[df['MATCHUP'].str.contains(opp)]
-    table_title = f"Games vs {opp} (last {len(df_filtered)})"
-else:
-    df_filtered = df
-    table_title = f"Recent Game Log (last 15)"
+df_filtered = df
+table_title = f"Recent Game Log (last 15)"
 
 st.markdown("---")
-
-# ... (rest of the main content remains unchanged: hit rates, charts, minutes projection, game log expander, footer)
 
 if lines:
     pdata = df.sort_values("GAME_DATE_DT", ascending=False).copy()
@@ -380,37 +392,14 @@ if lines:
             hit_str = "No data"
             avg_text = ""
         
-        c1, c2, c3 = st.columns([6, 3, 1])
-        with c1:
-            st.markdown(
-                f"<div class='hit-box'><strong>{stat} {line}</strong> {hit_str}{avg_text}</div>",
-                unsafe_allow_html=True
-            )
-        with c2:
-            odds_key = f"odds_{selected_player}_{stat}"
-            st.selectbox("Odds", odds_options, key=odds_key, label_visibility="collapsed")
-        with c3:
-            if st.button("📌", key=f"pin_{stat}_{line}"):
-                player_matchup = matchup_lookup.get(player_team, "Other/Unknown")
-                entry = {
-                    "player": selected_player,
-                    "team": player_team,
-                    "matchup": player_matchup,
-                    "stat": stat,
-                    "line": f"{line:.1f}",
-                    "odds": st.session_state.get(odds_key, ""),
-                    "hitrate_str": hit_str + avg_text,
-                    "timestamp": datetime.now()
-                }
-                if not any(
-                    e['player'] == entry['player'] and
-                    e['stat'] == entry['stat'] and
-                    e['line'] == entry['line']
-                    for e in st.session_state.my_board
-                ):
-                    st.session_state.my_board.append(entry)
-                    st.toast(f"Pinned {selected_player} • {stat} {line}", icon="📌")
-                    st.rerun()
+        st.markdown(
+            f"<div class='hit-box'><strong>{stat} {line}</strong> {hit_str}{avg_text}</div>",
+            unsafe_allow_html=True
+        )
+
+        for entry in st.session_state.my_board:
+            if entry['player'] == selected_player and entry['stat'] == stat and entry['line'] == f"{line:.1f}":
+                entry['hitrate_str'] = hit_str + avg_text
 
         if len(pdata) > 0:
             n = min(games_to_show, len(pdata))
@@ -481,6 +470,3 @@ with st.expander(f"📊 {table_title}", expanded=False):
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
 st.markdown("<p style='text-align:center; color:#88f0ff; padding-top:2rem;'>ICE PROP LAB • 2025-26</p>", unsafe_allow_html=True)
-
-
-
