@@ -166,8 +166,8 @@ player_options.sort(key=lambda x: x[1].lower())
 player_list_display = [opt[0] for opt in player_options]
 player_list_clean   = [opt[1] for opt in player_options]
 
-available_stats = ['PTS', 'FG3M','AST','REB', 'Ast+Reb', 'STL', 'BLK', 'TOV', 'FGM', 'FGA',  'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast',  'Stl+Blk', 'PRA']
-odds_options = ["", "-300", "-275", "-250","-245","-240","-235","-230", "-225", "-200", "-190", "-180", "-170", "-165", "-160", "-155", "-150", "-145", "-140", "-135", "-130", "-125", "-120", "-115", "-112" ,"-110", "-105", "-100", "+100", "+105", "+110", "+115", "+118", "+120", "+125", "+130", "+135", "+140", "+145", "+150", "+155", "+160", "+165", "+170", "+175", "+180", "+185", "+190", "+195", "+200", "+210", "+220", "+230", "+240", "+250", "+275", "+300"]
+available_stats = ['PTS', 'REB', 'AST', 'STL', 'BLK', 'TOV', 'FGM', 'FGA', 'FG3M', 'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast', 'Ast+Reb', 'Stl+Blk', 'PRA']
+odds_options = ["", "-300", "-275", "-250","-245","-240","-235","-230", "-225", "-200", "-190", "-180", "-170", "-160", "-155", "-150", "-145", "-140", "-135", "-130", "-125", "-120", "-115", "-112" ,"-110", "-105", "-100", "+100", "+105", "+110", "+115", "+118", "+120", "+125", "+130", "+135", "+140", "+145", "+150", "+155", "+160", "+165", "+170", "+175", "+180", "+185", "+190", "+195", "+200", "+210", "+220", "+230", "+240", "+250", "+275", "+300"]
 
 # ── Sidebar: Player / Stat ──────────────────────────────────────────────────────
 top_row = st.sidebar.columns([3, 2])
@@ -229,7 +229,7 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
                 recent_w = pdata.head(w)
                 hit_pct = (recent_w[selected_stat] > line).mean() * 100
                 over_list.append(hit_pct)
-                #window_labels.append(f"L{w}")
+                
 
             if over_list:
                 parts = []
@@ -239,13 +239,28 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
                 
                 hit_str = " | ".join(parts)
                 
+                # Calculate average minutes for the current window
+                recent_avg_min_val = pdata.head(selected_n)["MIN"].mean()
+
+                # Calculate Streak
+                results = (pdata[selected_stat] > line).tolist()
+                streak_type = "O" if results[0] else "U"
+                streak_count = 0
+                for r in results:
+                    if (r and streak_type == "O") or (not r and streak_type == "U"):
+                        streak_count += 1
+                    else:
+                        break
+                
                 avg_o = np.mean(over_list)
                 avg_u = 100 - avg_o
                 avg_color_o = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
                 avg_color_u = '#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555'
                 avg_text = (
                     f" AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / "
-                    f"<span style='color:{avg_color_u}'>U {avg_u:.0f}%</span>"
+                    f"<span style='color:{avg_color_u}'>U {avg_u:.0f}%</span> | "
+                    f"**Avg MIN: {recent_avg_min_val:.1f}** | "
+                    f"**{streak_type}{streak_count}**"
                 )
                 hitrate_str = hit_str + avg_text
             else:
@@ -420,7 +435,7 @@ if lines:
             recent_w = pdata.head(w)
             hit_pct = (recent_w[stat] > line).mean() * 100
             over_list.append(hit_pct)
-            #window_labels.append(f"L{w}")
+            
         
         if over_list:
             parts = []
@@ -443,13 +458,25 @@ if lines:
             avg_text = ""
         
         st.markdown(
-            f"<div class='hit-box'><strong>{stat} {line}</strong> {hit_str}{avg_text}</div>",
+            f"<div class='hit-box' ><strong>{stat} {line}</strong> {hit_str}{avg_text}</div>",
             unsafe_allow_html=True
         )
 
         if len(pdata) > 0:
             n = min(games_to_show, len(pdata))
             recent_data = pdata.head(n)
+
+            # Streak calculation for Main UI (Concise version)
+            res_main = (recent_data[stat] > line).tolist()
+            s_type = "O" if res_main[0] else "U"
+            s_count = 0
+            for r in res_main:
+                if (r and s_type == "O") or (not r and s_type == "U"):
+                    s_count += 1
+                else:
+                    break
+            
+            st.markdown(f"**{s_type}{s_count}**")
             
             fig = go.Figure()
             colors = ["#00ff88" if v > line else "#ff4444" for v in recent_data[stat]]
@@ -468,7 +495,6 @@ if lines:
                           annotation_text=f"line = {line}", annotation_position="top right")
             
             fig.update_layout(
-                title=f"{stat} — Last {n} game{'s' if n != 1 else ''}",
                 height=300,
                 margin=dict(t=50, b=40, l=20, r=20),
                 plot_bgcolor="rgba(0,0,0,0)",
@@ -490,7 +516,7 @@ if len(recent_min) >= 3:
 
     concern_min = "🟢 Solid" if projected_min >= 32 else "🟡 Some concern <32" if projected_min >= 28 else "🔴 High risk"
     arrow_min = "↑" if slope_min > 0.3 else "↓" if slope_min < -0.3 else "→"
-    st.markdown(f"**Projected next min**: ≈ **{projected_min:.1f}**  ({arrow_min} {slope_min:.1f} min/game) — **{concern_min}**")
+    st.markdown(f"**Projected next min**: ≈ **{projected_min:.1f}**  |  **Avg (Last {len(recent_min)})**: **{recent_avg_min:.1f}**  ({arrow_min} {slope_min:.1f} min/game) — **{concern_min}**")
 
     fig_min = go.Figure()
     colors_min = ["#00ff88" if m >= 35 else "#88ff88" if m >= 30 else "#ffff88" if m >= 25 else "#ffcc88" if m >= 20 else "#ff8888" for m in recent_min["MIN"]]
@@ -516,6 +542,3 @@ with st.expander(f"📊 {table_title}", expanded=False):
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
 st.markdown("<p style='text-align:center; color:#88f0ff; padding-top:2rem;'>ICE PROP LAB • 2025-26</p>", unsafe_allow_html=True)
-
-
-
