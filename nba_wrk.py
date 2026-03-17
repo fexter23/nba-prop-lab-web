@@ -226,9 +226,9 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
 
             if over_list:
                 parts = []
-                for pct, lbl in zip(over_list):
+                for pct in zip(over_list):
                     color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
-                    parts.append(f"<span style='color:{color}'>{pct:.0f}%</span> ({lbl})")
+                    parts.append(f"<span style='color:{color}'>{pct:.0f}%</span>")
                 
                 hit_str = " | ".join(parts)
                 
@@ -410,9 +410,9 @@ if lines:
         
         if over_list:
             parts = []
-            for pct, lbl in zip(over_list):
+            for pct in zip(over_list):
                 color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
-                parts.append(f"<span style='color:{color}'>{pct:.0f}%</span> ({lbl})")
+                parts.append(f"<span style='color:{color}'>{pct:.0f}%</span>")
             
             hit_str = " | ".join(parts)
             
