@@ -1,4 +1,5 @@
 # nba_wrk.py – ICE PROP LAB • Single Player + Persistent Opponent + DvP Panel
+# (fixed to last 10 games – no selector)
 
 import streamlit as st
 import json
@@ -63,7 +64,7 @@ def get_todays_games(game_date: str):
 
 games_today, num_games = get_todays_games(today_str)
 
-# Create a lookup for player team -> current matchup label
+# Create a lookup for player team → current matchup label
 matchup_lookup = {}
 for g in games_today:
     label = f"{g['away']} @ {g['home']}"
@@ -102,54 +103,25 @@ def get_player_id(name):
         if p['full_name'].lower() == name.lower(): return p['id']
     return None
 
-def get_hitrate_edge(hitrate_str: str) -> float:
-    if not hitrate_str or "AVG:" not in hitrate_str: return 0.0
-    try:
-        avg_part = hitrate_str.split("AVG:")[1]
-        o_pct = float(avg_part.split("O ")[1].split("%")[0].strip())
-        return max(o_pct, 100 - o_pct) - 50
-    except: return 0.0
-
-def calculate_decimal_odds(odds_str: str) -> float:
-    if not odds_str or odds_str.strip() == "":
-        return 1.0
-    try:
-        odds = float(odds_str.strip().replace('+', ''))
-        if odds > 0:
-            return (odds / 100.0) + 1.0
-        elif odds < 0:
-            return (100.0 / abs(odds)) + 1.0
-        return 1.0
-    except (ValueError, ZeroDivisionError):
-        return 1.0
-
+# ── Player & Team lookup ────────────────────────────────────────────────────────
 @st.cache_data(ttl=7200)
 def get_active_players_with_teams():
     for season in [CURRENT_SEASON, PREVIOUS_SEASON]:
         try:
-            df = leaguedashplayerstats.LeagueDashPlayerStats(season=season, season_type_all_star="Regular Season").get_data_frames()[0]
+            df = leaguedashplayerstats.LeagueDashPlayerStats(
+                season=season, 
+                season_type_all_star="Regular Season"
+            ).get_data_frames()[0]
             if not df.empty and len(df) > 80:
                 df = df[df['TEAM_ABBREVIATION'].notna() & (df['TEAM_ABBREVIATION'] != '')]
                 return dict(zip(df['PLAYER_ID'].astype(str), df['TEAM_ABBREVIATION']))
         except: continue
     return {}
 
-@st.cache_data(ttl=300)
-def get_player_games(pid):
-    for season in [CURRENT_SEASON, PREVIOUS_SEASON]:
-        try:
-            df = PlayerGameLog(player_id=str(pid), season=season, season_type_all_star='Regular Season').get_data_frames()[0]
-            if not df.empty:
-                df["GAME_DATE_DT"] = pd.to_datetime(df["GAME_DATE"])
-                df["GAME_DATE"] = df["GAME_DATE_DT"].dt.strftime("%m/%d")
-                return df.sort_values("GAME_DATE_DT", ascending=False).reset_index(drop=True)
-        except: continue
-    return pd.DataFrame()
+player_team_map = get_active_players_with_teams()
 
 # ── Load and Filter Player List ─────────────────────────────────────────────────
-player_team_map = get_active_players_with_teams()
 player_options = []
-
 for p in players.get_players():
     pid_str = str(p["id"])
     if pid_str not in player_team_map:
@@ -166,24 +138,51 @@ player_options.sort(key=lambda x: x[1].lower())
 player_list_display = [opt[0] for opt in player_options]
 player_list_clean   = [opt[1] for opt in player_options]
 
-available_stats = ['PTS', 'FG3M','AST','REB', 'Ast+Reb', 'STL', 'BLK', 'TOV', 'FGM', 'FGA',  'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast',  'Stl+Blk', 'PRA']
-odds_options = ["", "-300", "-275", "-250","-245","-240","-235","-230", "-225", "-220","-215","-210","-205","-200", "-195","-190", "-185","-180","-175", "-170", "-165","-160", "-155", "-150", "-145", "-140", "-135", "-130", "-125", "-120", "-115", "-112" ,"-110", "-105", "-100", "+100", "+102", "+105", "+110", "+115", "+118", "+120", "+125", "+130", "+135", "+140", "+145", "+150", "+155", "+160", "+165", "+170", "+175", "+180", "+185", "+190", "+195", "+200", "+210", "+220", "+230", "+240", "+250", "+275", "+300"]
+available_stats = ['PTS', 'FG3M','AST','REB', 'Ast+Reb', 'STL', 'BLK', 'TOV', 'FGM', 'FGA',  
+                   'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast', 'Stl+Blk', 'PRA']
+
+odds_options = ["", "-300", "-275", "-250","-245","-240","-235","-230", "-225", "-220",
+                "-215","-210","-205","-200", "-195","-190", "-185","-180","-175", "-170",
+                "-165","-160", "-155", "-150", "-145", "-140", "-135", "-130", "-125",
+                "-120", "-115", "-112" ,"-110", "-105", "-100", "+100", "+102", "+105",
+                "+110", "+115", "+118", "+120", "+125", "+130", "+135", "+140", "+145",
+                "+150", "+155", "+160", "+165", "+170", "+175", "+180", "+185", "+190",
+                "+195", "+200", "+210", "+220", "+230", "+240", "+250", "+275", "+300"]
 
 # ── Sidebar: Player / Stat ──────────────────────────────────────────────────────
 top_row = st.sidebar.columns([3, 2])
 with top_row[0]:
-    selected_display = st.selectbox("Player", ["— Choose player —"] + player_list_display, key="player_select", label_visibility="collapsed")
+    selected_display = st.selectbox("Player", ["— Choose player —"] + player_list_display, 
+                                   key="player_select", label_visibility="collapsed")
 with top_row[1]:
-    selected_stat = st.selectbox("Stat", ["— Select stat —"] + available_stats, index=1, key="stat_select", label_visibility="collapsed")
+    selected_stat = st.selectbox("Stat", ["— Select stat —"] + available_stats, 
+                                index=1, key="stat_select", label_visibility="collapsed")
 
 selected_player = next((clean for disp, clean in player_options if disp == selected_display), None)
 pid = get_player_id(selected_player) if selected_player else None
 player_team = player_team_map.get(str(pid), "???") if pid else "???"
 
-# ── Load game log EARLY so it's available for pin calculation ────────────────
+# ── Load game log ───────────────────────────────────────────────────────────────
 df = None
 if pid:
-    df = get_player_games(pid)
+    @st.cache_data(ttl=300)
+    def get_player_games_cached(pid_str):
+        for season in [CURRENT_SEASON, PREVIOUS_SEASON]:
+            try:
+                df_log = PlayerGameLog(
+                    player_id=pid_str, 
+                    season=season, 
+                    season_type_all_star='Regular Season'
+                ).get_data_frames()[0]
+                if not df_log.empty:
+                    df_log["GAME_DATE_DT"] = pd.to_datetime(df_log["GAME_DATE"])
+                    df_log["GAME_DATE"] = df_log["GAME_DATE_DT"].dt.strftime("%m/%d")
+                    return df_log.sort_values("GAME_DATE_DT", ascending=False).reset_index(drop=True)
+            except:
+                continue
+        return pd.DataFrame()
+
+    df = get_player_games_cached(str(pid))
     if not df.empty:
         df["Pts+Ast"] = df["PTS"] + df["AST"]
         df["Pts+Reb"] = df["PTS"] + df["REB"]
@@ -197,39 +196,33 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
     st.sidebar.markdown(f"**{selected_stat} line**")
     line_col, odds_col = st.sidebar.columns(2)
     with line_col:
-        val = st.selectbox(f"{selected_stat} line", dropdown_values(), format_func=lambda x: "—" if x is None else f"{x}", key=f"line_{selected_stat}", label_visibility="collapsed")
+        val = st.selectbox(f"{selected_stat} line", dropdown_values(), 
+                          format_func=lambda x: "—" if x is None else f"{x}", 
+                          key=f"line_{selected_stat}", label_visibility="collapsed")
         if val is not None: lines[selected_stat] = val
     with odds_col:
         odds_key = f"odds_{selected_player}_{selected_stat}"
         st.selectbox("Odds", odds_options, key=odds_key, label_visibility="collapsed")
 
-    # Pin button + immediate hitrate calculation
+    # Pin button + hitrate calculation (last 10 games)
     if st.sidebar.button("📌", key=f"pin_{selected_stat}_{lines.get(selected_stat, '')}", use_container_width=True):
         if selected_stat not in lines:
             st.warning("No line selected")
         else:
             line = lines[selected_stat]
-
-            # Calculate hit rate string RIGHT NOW using the pre-loaded df
             pdata = df.sort_values("GAME_DATE_DT", ascending=False).copy()
-            selected_n = st.session_state.get('games_to_show', 10)  # fallback to default
-            if selected_n == 5:
-                windows = [5]
-            elif selected_n == 10:
-                windows = [5, 10]
-            elif selected_n == 15:
-                windows = [5, 10, 15]
-            else:
-                windows = [5, 10, 15, selected_n]
+
+            # Fixed windows: 5 and 10 games
+            windows = [5, 10]
             windows = [w for w in windows if len(pdata) >= w]
 
             over_list = []
-            window_labels = []
+            window_labels = [f"L{w}" for w in windows]
+
             for w in windows:
                 recent_w = pdata.head(w)
                 hit_pct = (recent_w[selected_stat] > line).mean() * 100
                 over_list.append(hit_pct)
-                
 
             if over_list:
                 parts = []
@@ -239,10 +232,10 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
                 
                 hit_str = " | ".join(parts)
                 
-                # Calculate average minutes for the current window
-                recent_avg_min_val = pdata.head(selected_n)["MIN"].mean()
+                # Average minutes (last 10)
+                recent_avg_min_val = pdata.head(10)["MIN"].mean()
 
-                # Calculate Streak
+                # Current streak
                 results = (pdata[selected_stat] > line).tolist()
                 streak_type = "O" if results[0] else "U"
                 streak_count = 0
@@ -288,14 +281,15 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
                 st.toast(f"Pinned → {selected_player} • {selected_stat} {line}", icon="📌")
                 st.rerun()
 
-# --- My Dashboard (checkbox left, X right) ---
+# ── My Dashboard ────────────────────────────────────────────────────────────────
+# (same as before – kept unchanged)
 
 if st.session_state.my_board:
     dash_df = pd.DataFrame(st.session_state.my_board)
     dash_df['match_key'] = dash_df['matchup']
     
     for match, group in dash_df.groupby('match_key'):
-        total_payout = 1.0  # total return (stake + profit)
+        total_payout = 1.0
         try:
             multiplier = 1.0
             for _, row in group.iterrows():
@@ -357,18 +351,7 @@ else:
 
 st.sidebar.divider()
 
-# ── Recent games selector & refresh ─────────────────────────────────────────────
-bottom_row = st.sidebar.columns([2, 1])
-with bottom_row[0]: 
-    games_to_show = st.selectbox("Recent games", [5,10,15,20], index=1, label_visibility="collapsed")
-with bottom_row[1]:
-    if st.button("🔄"): 
-        st.cache_data.clear()
-        st.rerun()
-
-# ── Data Management ─────────────────────────────────────────────────────────────
-
-
+# ── Download / Upload Board ─────────────────────────────────────────────────────
 def get_board_json():
     data = []
     for entry in st.session_state.my_board:
@@ -406,36 +389,24 @@ if not selected_player or df is None or df.empty:
     st.info("Select a player from the sidebar or no data available.")
     st.stop()
 
-df_filtered = df
-table_title = f"Recent Game Log (last 15)"
-
 st.markdown("---")
 
+# ── Hit rate display (fixed last 10) ────────────────────────────────────────────
 if lines:
     pdata = df.sort_values("GAME_DATE_DT", ascending=False).copy()
+    selected_n = 10
     
-    selected_n = games_to_show
-    
-    if selected_n == 5:
-        windows = [5]
-    elif selected_n == 10:
-        windows = [5, 10]
-    elif selected_n == 15:
-        windows = [5, 10, 15]
-    else:
-        windows = [5, 10, 15, selected_n]
-    
+    windows = [5, 10]
     windows = [w for w in windows if len(pdata) >= w]
     
     for stat, line in lines.items():
         over_list = []
-        window_labels = []
+        window_labels = [f"L{w}" for w in windows]
         
         for w in windows:
             recent_w = pdata.head(w)
             hit_pct = (recent_w[stat] > line).mean() * 100
             over_list.append(hit_pct)
-            
         
         if over_list:
             parts = []
@@ -458,15 +429,15 @@ if lines:
             avg_text = ""
         
         st.markdown(
-            f"<div class='hit-box' ><strong>{stat} {line}</strong> {hit_str}{avg_text}</div>",
+            f"<div class='hit-box'><strong>{stat} {line}</strong> {hit_str}{avg_text}</div>",
             unsafe_allow_html=True
         )
 
         if len(pdata) > 0:
-            n = min(games_to_show, len(pdata))
+            n = min(selected_n, len(pdata))
             recent_data = pdata.head(n)
 
-            # Streak calculation for Main UI (Concise version)
+            # Streak (last 10)
             res_main = (recent_data[stat] > line).tolist()
             s_type = "O" if res_main[0] else "U"
             s_count = 0
@@ -506,7 +477,8 @@ if lines:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-recent_min = df.head(games_to_show)
+# ── Minutes projection (last 10) ────────────────────────────────────────────────
+recent_min = df.head(10)
 if len(recent_min) >= 3:
     x_min = np.arange(len(recent_min))
     y_min = recent_min["MIN"].values
@@ -516,7 +488,7 @@ if len(recent_min) >= 3:
 
     concern_min = "🟢 Solid" if projected_min >= 32 else "🟡 Some concern <32" if projected_min >= 28 else "🔴 High risk"
     arrow_min = "↑" if slope_min > 0.3 else "↓" if slope_min < -0.3 else "→"
-    st.markdown(f"**Projected next min**: ≈ **{projected_min:.1f}**  |  **Avg (Last {len(recent_min)})**: **{recent_avg_min:.1f}**  ({arrow_min} {slope_min:.1f} min/game) — **{concern_min}**")
+    st.markdown(f"**Projected next min**: ≈ **{projected_min:.1f}**  |  **Avg (Last 10)**: **{recent_avg_min:.1f}**  ({arrow_min} {slope_min:.1f} min/game) — **{concern_min}**")
 
     fig_min = go.Figure()
     colors_min = ["#00ff88" if m >= 35 else "#88ff88" if m >= 30 else "#ffff88" if m >= 25 else "#ffcc88" if m >= 20 else "#ff8888" for m in recent_min["MIN"]]
@@ -526,23 +498,20 @@ if len(recent_min) >= 3:
     fig_min.update_layout(height=340, showlegend=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="#00e0ff", margin=dict(t=20,b=40,l=30,r=30))
     st.plotly_chart(fig_min, use_container_width=True)
 
-with st.expander(f"📊 {table_title}", expanded=False):
+# ── Game log table ──────────────────────────────────────────────────────────────
+with st.expander(f"📊 Recent Game Log (last 15)", expanded=False):
     display_cols = ["GAME_DATE", "MATCHUP", "WL", "MIN", "PTS", "REB", "AST", "STL", "BLK", "TOV", "FG3M", "+/-"]
-    available_cols = [c for c in display_cols if c in df_filtered.columns]
+    available_cols = [c for c in display_cols if c in df.columns]
     
     def highlight_minutes(val):
         if pd.isna(val): return ''
         color = '#00cc88' if val >= 32 else '#ffcc00' if val >= 28 else '#ff5555'
         return f'background-color: {color}; color: black'
     
-    styled_df = df_filtered.head(15)[available_cols].style\
+    styled_df = df.head(15)[available_cols].style\
         .format(precision=1)\
         .map(highlight_minutes, subset=pd.IndexSlice[:, ['MIN'] if 'MIN' in available_cols else []])
     
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
 st.markdown("<p style='text-align:center; color:#88f0ff; padding-top:2rem;'>ICE PROP LAB • 2025-26</p>", unsafe_allow_html=True)
-
-
-
-
