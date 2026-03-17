@@ -142,7 +142,7 @@ available_stats = ['PTS', 'FG3M','AST','REB', 'Ast+Reb', 'STL', 'BLK', 'TOV', 'F
                    'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast', 'Stl+Blk', 'PRA']
 
 odds_options = ["", "-300", "-275", "-250","-245","-240","-235","-230", "-225", "-220",
-                "-215","-210","-205","-200", "-195","-190", "-185","-180","-175", "-170",
+                "-215","-210","-205","-200", "-195","-190","-185","-180","-175", "-170",
                 "-165","-160", "-155", "-150", "-145", "-140", "-135", "-130", "-125",
                 "-120", "-115", "-112" ,"-110", "-105", "-100", "+100", "+102", "+105",
                 "+110", "+115", "+118", "+120", "+125", "+130", "+135", "+140", "+145",
@@ -212,12 +212,10 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
             line = lines[selected_stat]
             pdata = df.sort_values("GAME_DATE_DT", ascending=False).copy()
 
-            # Fixed windows: 5 and 10 games
             windows = [5, 10]
             windows = [w for w in windows if len(pdata) >= w]
 
             over_list = []
-            window_labels = [f"L{w}" for w in windows]
 
             for w in windows:
                 recent_w = pdata.head(w)
@@ -226,9 +224,9 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
 
             if over_list:
                 parts = []
-                for pct, lbl in zip(over_list, window_labels):
+                for pct in over_list:
                     color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
-                    parts.append(f"<span style='color:{color}'>{pct:.0f}%</span> ({lbl})")
+                    parts.append(f"<span style='color:{color}'>{pct:.0f}%</span>")
                 
                 hit_str = " | ".join(parts)
                 
@@ -255,7 +253,7 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
                     f"**Avg MIN: {recent_avg_min_val:.1f}** | "
                     f"**{streak_type}{streak_count}**"
                 )
-                hitrate_str = hit_str + avg_text
+                hitrate_str = hit_str + " " + avg_text
             else:
                 hitrate_str = "No data"
 
@@ -282,8 +280,6 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
                 st.rerun()
 
 # ── My Dashboard ────────────────────────────────────────────────────────────────
-# (same as before – kept unchanged)
-
 if st.session_state.my_board:
     dash_df = pd.DataFrame(st.session_state.my_board)
     dash_df['match_key'] = dash_df['matchup']
@@ -401,7 +397,6 @@ if lines:
     
     for stat, line in lines.items():
         over_list = []
-        window_labels = [f"L{w}" for w in windows]
         
         for w in windows:
             recent_w = pdata.head(w)
@@ -410,9 +405,9 @@ if lines:
         
         if over_list:
             parts = []
-            for pct, lbl in zip(over_list, window_labels):
+            for pct in over_list:
                 color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
-                parts.append(f"<span style='color:{color}'>{pct:.0f}%</span> ({lbl})")
+                parts.append(f"<span style='color:{color}'>{pct:.0f}%</span>")
             
             hit_str = " | ".join(parts)
             
@@ -421,7 +416,7 @@ if lines:
             avg_color_o = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
             avg_color_u = '#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555'
             avg_text = (
-                f" AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / "
+                f" AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / "
                 f"<span style='color:{avg_color_u}'>U {avg_u:.0f}%</span>"
             )
         else:
