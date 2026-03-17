@@ -217,7 +217,7 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
             windows = [w for w in windows if len(pdata) >= w]
 
             over_list = []
-            window_labels = [f"L{w}" for w in windows]
+            #window_labels = [f"L{w}" for w in windows]
 
             for w in windows:
                 recent_w = pdata.head(w)
@@ -226,7 +226,7 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
 
             if over_list:
                 parts = []
-                for pct, lbl in zip(over_list, window_labels):
+                for pct, lbl in zip(over_list):
                     color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
                     parts.append(f"<span style='color:{color}'>{pct:.0f}%</span> ({lbl})")
                 
@@ -401,7 +401,7 @@ if lines:
     
     for stat, line in lines.items():
         over_list = []
-        window_labels = [f"L{w}" for w in windows]
+        #window_labels = [f"L{w}" for w in windows]
         
         for w in windows:
             recent_w = pdata.head(w)
@@ -410,7 +410,7 @@ if lines:
         
         if over_list:
             parts = []
-            for pct, lbl in zip(over_list, window_labels):
+            for pct, lbl in zip(over_list):
                 color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
                 parts.append(f"<span style='color:{color}'>{pct:.0f}%</span> ({lbl})")
             
