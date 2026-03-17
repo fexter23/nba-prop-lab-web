@@ -217,7 +217,7 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
             windows = [w for w in windows if len(pdata) >= w]
 
             over_list = []
-            window_labels = [f"L{w}" for w in windows]
+            #window_labels = [f"L{w}" for w in windows]
 
             for w in windows:
                 recent_w = pdata.head(w)
