@@ -2,11 +2,12 @@ name: Daily NBA Data Refresh
 
 on:
   schedule:
-    - cron: '45 5 * * *'          # every day at 5:45 UTC (~12:45 AM EST)
-  workflow_dispatch:              # allows manual trigger from GitHub UI
+    # Runs at 10:00 UTC (5:00 AM EST) every day
+    - cron: '0 10 * * *'
+  workflow_dispatch:              # Allows manual trigger from GitHub UI
 
 permissions:
-  contents: write                 # required to allow the workflow to push commits
+  contents: write                 # Required to allow the workflow to push commits
 
 jobs:
   update-and-commit:
@@ -16,7 +17,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0            # important for proper git history & merging
+          fetch-depth: 0            # Important for proper git history & merging
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -28,8 +29,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run data update script
-        run: python scripts/update_nba_data.py
+      - name: Run data update scripts
+        run: |
+          python scripts/update_nba_data.py
+          python scripts/nba_daily_sync.py
 
       - name: Commit and push changes (if any)
         run: |
@@ -40,15 +43,15 @@ jobs:
           git fetch origin
           git merge origin/main --no-edit --no-ff || { echo "Merge conflict or no changes to merge"; exit 0; }
           
-          # Stage any changes in the data/ folder
-          git add data/
+          # Stage changes in the data folder
+          git add data
           
           # Only commit if there are actual changes
           git diff --staged --quiet && { echo "No changes to commit"; exit 0; } || true
           
           git commit -m "Daily NBA data refresh $(date +'%Y-%m-%d')" || { echo "Nothing to commit"; exit 0; }
           
-          # Push (should now succeed after merge)
+          # Push changes back to main
           git push origin HEAD:main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
