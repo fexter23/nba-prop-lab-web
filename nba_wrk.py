@@ -3,6 +3,7 @@
 
 import streamlit as st
 import json
+import os
 from nba_api.stats.static import players
 from nba_api.stats.static import teams as static_teams
 from nba_api.stats.endpoints import leaguedashplayerstats, PlayerGameLog, scoreboardv2
@@ -15,7 +16,7 @@ from collections import defaultdict
 # ── Season helpers ──────────────────────────────────────────────────────────────
 def get_current_season():
     today = datetime.today()
-    return f"{today.year}-{str(today.year + 1)[-2:]}" if today.month >= 10 else f"{today.year-1}-{str(today.year)[-2:]}"
+    return f"{today.year}-{str(today.year + 1)[-2:]}" if today.month >= 10 else f"{today.year-1}-{str(today.year)[2:]}"
 
 CURRENT_SEASON = get_current_season()
 current_year = int(CURRENT_SEASON.split('-')[0])
@@ -99,6 +100,13 @@ def dropdown_values():
     return [None] + [round(x, 1) for x in np.arange(0.5, 60.6, 1.0)]
 
 def get_player_id(name):
+    # Try to use local parquet for ID lookup if available to avoid API hits
+    if os.path.exists("data/players.parquet"):
+        df_p = pd.read_parquet("data/players.parquet")
+        match = df_p[df_p['full_name'].str.lower() == name.lower()]
+        if not match.empty:
+            return match.iloc[0]['id']
+            
     for p in players.get_players():
         if p['full_name'].lower() == name.lower(): return p['id']
     return None
@@ -106,6 +114,14 @@ def get_player_id(name):
 # ── Player & Team lookup ────────────────────────────────────────────────────────
 @st.cache_data(ttl=7200)
 def get_active_players_with_teams():
+    # Attempt to load from update_nba_data.py output first
+    if os.path.exists("data/active_player_teams.parquet"):
+        try:
+            df_local = pd.read_parquet("data/active_player_teams.parquet")
+            return dict(zip(df_local['PLAYER_ID'].astype(str), df_local['TEAM_ABBR']))
+        except: pass
+
+    # Fallback to API
     for season in [CURRENT_SEASON, PREVIOUS_SEASON]:
         try:
             df = leaguedashplayerstats.LeagueDashPlayerStats(
@@ -121,8 +137,17 @@ def get_active_players_with_teams():
 player_team_map = get_active_players_with_teams()
 
 # ── Load and Filter Player List ─────────────────────────────────────────────────
+@st.cache_data(ttl=86400)
+def get_base_player_list():
+    if os.path.exists("data/players.parquet"):
+        try:
+            return pd.read_parquet("data/players.parquet").to_dict('records')
+        except: pass
+    return players.get_players()
+
+all_players = get_base_player_list()
 player_options = []
-for p in players.get_players():
+for p in all_players:
     pid_str = str(p["id"])
     if pid_str not in player_team_map:
         continue
@@ -142,7 +167,7 @@ available_stats = ['PTS', 'FG3M','AST','REB', 'Ast+Reb', 'STL', 'BLK', 'TOV', 'F
                    'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast', 'Stl+Blk', 'PRA']
 
 odds_options = ["", "-300", "-275", "-250","-245","-240","-235","-230", "-225", "-220",
-                "-215","-210","-205","-200", "-195","-190","-185","-180","-175", "-170",
+                "-215","-210","-205","-200", "-195","-190", "-185","-180","-175", "-170",
                 "-165","-160", "-155", "-150", "-145", "-140", "-135", "-130", "-125",
                 "-120", "-115", "-112" ,"-110", "-105", "-100", "+100", "+102", "+105",
                 "+110", "+115", "+118", "+120", "+125", "+130", "+135", "+140", "+145",
@@ -212,10 +237,12 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
             line = lines[selected_stat]
             pdata = df.sort_values("GAME_DATE_DT", ascending=False).copy()
 
+            # Fixed windows: 5 and 10 games
             windows = [5, 10]
             windows = [w for w in windows if len(pdata) >= w]
 
             over_list = []
+            window_labels = [f"L{w}" for w in windows]
 
             for w in windows:
                 recent_w = pdata.head(w)
@@ -224,9 +251,9 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
 
             if over_list:
                 parts = []
-                for pct in over_list:
+                for pct, lbl in zip(over_list, window_labels):
                     color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
-                    parts.append(f"<span style='color:{color}'>{pct:.0f}%</span>")
+                    parts.append(f"<span style='color:{color}'>{pct:.0f}%</span> ({lbl})")
                 
                 hit_str = " | ".join(parts)
                 
@@ -253,7 +280,7 @@ if selected_stat and selected_stat != "— Select stat —" and df is not None a
                     f"**Avg MIN: {recent_avg_min_val:.1f}** | "
                     f"**{streak_type}{streak_count}**"
                 )
-                hitrate_str = hit_str + " " + avg_text
+                hitrate_str = hit_str + avg_text
             else:
                 hitrate_str = "No data"
 
@@ -397,6 +424,7 @@ if lines:
     
     for stat, line in lines.items():
         over_list = []
+        window_labels = [f"L{w}" for w in windows]
         
         for w in windows:
             recent_w = pdata.head(w)
@@ -405,18 +433,18 @@ if lines:
         
         if over_list:
             parts = []
-            for pct in over_list:
+            for pct, lbl in zip(over_list, window_labels):
                 color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
-                parts.append(f"<span style='color:{color}'>{pct:.0f}%</span>")
+                parts.append(f"<span style='color:{color}'>{pct:.0f}%</span> ({lbl})")
             
             hit_str = " | ".join(parts)
             
             avg_o = np.mean(over_list)
             avg_u = 100 - avg_o
             avg_color_o = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
-            avg_color_u = '#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555'
+            avg_color_u = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
             avg_text = (
-                f" AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / "
+                f" AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / "
                 f"<span style='color:{avg_color_u}'>U {avg_u:.0f}%</span>"
             )
         else:
