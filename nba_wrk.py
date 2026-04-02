@@ -1,4 +1,4 @@
-# nba_wrk.py – ICE PROP LAB • Single Player + Persistent Opponent + DvP Panel
+# nba_wrk.py – NBA Hit Tracker • Single Player + Persistent Opponent + DvP Panel
 # (fixed to last 10 games – no selector)
 
 import streamlit as st
@@ -21,7 +21,7 @@ CURRENT_SEASON = get_current_season()
 current_year = int(CURRENT_SEASON.split('-')[0])
 PREVIOUS_SEASON = f"{current_year - 1}-{str(current_year)[-2:]}"
 
-st.set_page_config(page_title="ICE PROP LAB", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="NBA Hit Tracker", layout="wide", initial_sidebar_state="expanded")
 
 # ── Session state ───────────────────────────────────────────────────────────────
 if 'my_board' not in st.session_state:
