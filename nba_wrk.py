@@ -144,8 +144,6 @@ pid = get_player_id(selected_player) if selected_player else None
 player_team = player_team_map.get(str(pid), "???") if pid else "???"
 
 # ── Stat • Line • Odds (same line) ──────────────────────────────────────────────
-
-
 available_stats = ['PTS', 'FG3M','AST','REB', 'Ast+Reb', 'STL', 'BLK', 'TOV', 'FGM', 'FGA',  
                    'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast', 'Stl+Blk', 'PRA']
 
@@ -230,11 +228,11 @@ if (selected_player and selected_stat and selected_stat != "— Select stat —"
         hit_pct = (recent_w[selected_stat] > line).mean() * 100
         over_list.append(hit_pct)
 
-    window_labels = [f"L{w}" for w in windows]
+    # Clean percentages only (no L5 / L10)
     parts = []
-    for pct, lbl in zip(over_list, window_labels):
+    for pct in over_list:
         color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
-        parts.append(f"<span style='color:{color}'>{pct:.0f}%</span> ({lbl})")
+        parts.append(f"<span style='color:{color}'>{pct:.0f}%</span>")
     
     hit_str = " | ".join(parts)
     recent_avg_min_val = pdata.head(10)["MIN"].mean()
@@ -348,8 +346,6 @@ if st.session_state.my_board:
 else:
     st.sidebar.caption("No props saved. Pin some above!")
 
-
-
 # ── Download / Upload Board ─────────────────────────────────────────────────────
 def get_board_json():
     data = []
@@ -403,11 +399,11 @@ if lines:
             hit_pct = (recent_w[stat] > line).mean() * 100
             over_list.append(hit_pct)
         
-        window_labels = [f"L{w}" for w in windows]
+        # Clean percentages only (no L5 / L10)
         parts = []
-        for pct, lbl in zip(over_list, window_labels):
+        for pct in over_list:
             color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
-            parts.append(f"<span style='color:{color}'>{pct:.0f}%</span> ({lbl})")
+            parts.append(f"<span style='color:{color}'>{pct:.0f}%</span>")
         
         hit_str = " | ".join(parts)
         avg_o = np.mean(over_list)
