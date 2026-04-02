@@ -62,13 +62,14 @@ def get_todays_games(game_date: str):
 
 games_today, num_games = get_todays_games(today_str)
 
+# Matchup lookup
 matchup_lookup = {}
 for g in games_today:
     label = f"{g['away']} @ {g['home']}"
     matchup_lookup[g['away']] = label
     matchup_lookup[g['home']] = label
 
-# ── Helpers ─────────────────────────────────────────────────────────────────────
+# ── Helper Functions ────────────────────────────────────────────────────────────
 def dropdown_values():
     return [None] + [round(x, 1) for x in np.arange(0.5, 60.6, 1.0)]
 
@@ -78,7 +79,7 @@ def get_player_id(name):
             return p['id']
     return None
 
-# ── Sidebar: Game Filter + Player ───────────────────────────────────────────────
+# ── Sidebar: Game Filter + Player (same line) ───────────────────────────────────
 st.sidebar.markdown("### Today's Games & Player")
 
 top_filters = st.sidebar.columns([2.2, 2.8])
@@ -86,6 +87,7 @@ top_filters = st.sidebar.columns([2.2, 2.8])
 with top_filters[0]:
     game_options = ["— All Players —"]
     game_labels_to_teams = {"— All Players —": None}
+
     for g in games_today:
         label = f"{g['away']} @ {g['home']}  ({g['status']})"
         game_options.append(label)
@@ -124,8 +126,9 @@ with top_filters[1]:
         if pid_str not in player_team_map:
             continue
         team = player_team_map[pid_str]
-        if st.session_state.filter_teams is not None and team not in st.session_state.filter_teams:
-            continue
+        if st.session_state.filter_teams is not None:
+            if team not in st.session_state.filter_teams:
+                continue
         player_options.append((f"{p['full_name']} • {team}", p['full_name']))
 
     player_options.sort(key=lambda x: x[1].lower())
@@ -140,8 +143,8 @@ selected_player = next((clean for disp, clean in player_options if disp == selec
 pid = get_player_id(selected_player) if selected_player else None
 player_team = player_team_map.get(str(pid), "???") if pid else "???"
 
-# ── Stat • Line • Odds • Pin • Download (All on ONE line) ───────────────────────
-st.sidebar.markdown("### Stat • Line • Odds • Actions")
+# ── Stat • Line • Odds (same line) ──────────────────────────────────────────────
+
 
 available_stats = ['PTS', 'FG3M','AST','REB', 'Ast+Reb', 'STL', 'BLK', 'TOV', 'FGM', 'FGA',  
                    'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast', 'Stl+Blk', 'PRA']
@@ -157,18 +160,17 @@ odds_options = ["", "-300", "-275", "-250","-245","-240","-235","-230", "-225", 
 lines = {}
 selected_stat = None
 odds_key = None
-pin_clicked = False   # ← Fixed: Initialized here
 
 if selected_player:
-    cols = st.sidebar.columns([1.5, 1.3, 1.3, 0.9, 0.9])
+    col_stat, col_line, col_odds = st.sidebar.columns([1.8, 1.6, 1.6])
     
-    with cols[0]:
+    with col_stat:
         selected_stat = st.selectbox(
             "Stat", ["— Select stat —"] + available_stats, 
             index=1, key="stat_select", label_visibility="collapsed"
         )
     
-    with cols[1]:
+    with col_line:
         line_val = st.selectbox(
             "Line", dropdown_values(), 
             format_func=lambda x: "—" if x is None else f"{x:.1f}", 
@@ -177,36 +179,44 @@ if selected_player:
         if line_val is not None and selected_stat and selected_stat != "— Select stat —":
             lines[selected_stat] = line_val
     
-    with cols[2]:
+    with col_odds:
         odds_key = f"odds_{selected_player}_{selected_stat if selected_stat else 'none'}"
         st.selectbox("Odds", odds_options, key=odds_key, label_visibility="collapsed")
-    
-    with cols[3]:
-        pin_clicked = st.button("📌 Pin", use_container_width=True, type="primary")
-    
-    with cols[4]:
-        def get_board_json():
-            data = []
-            for entry in st.session_state.my_board:
-                item = entry.copy()
-                if isinstance(item.get('timestamp'), datetime):
-                    item['timestamp'] = item['timestamp'].isoformat()
-                data.append(item)
-            return json.dumps(data)
-
-        st.download_button(
-            label="↓ Board",
-            data=get_board_json(),
-            file_name=f"board_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
-            mime="application/json",
-            use_container_width=True
-        )
 else:
-    st.sidebar.info("Select a player above")
+    st.sidebar.info("Select a player to load options")
 
-# ── Pin Logic ───────────────────────────────────────────────────────────────────
-if pin_clicked and selected_player and selected_stat and selected_stat != "— Select stat —" and \
-   selected_stat in lines and df is not None and not df.empty:   # df check moved after df is defined
+# ── Load Player Game Log ────────────────────────────────────────────────────────
+df = None
+if pid:
+    @st.cache_data(ttl=300)
+    def get_player_games_cached(pid_str):
+        for season in [CURRENT_SEASON, PREVIOUS_SEASON]:
+            try:
+                df_log = PlayerGameLog(
+                    player_id=pid_str, 
+                    season=season, 
+                    season_type_all_star='Regular Season'
+                ).get_data_frames()[0]
+                if not df_log.empty:
+                    df_log["GAME_DATE_DT"] = pd.to_datetime(df_log["GAME_DATE"])
+                    df_log["GAME_DATE"] = df_log["GAME_DATE_DT"].dt.strftime("%m/%d")
+                    return df_log.sort_values("GAME_DATE_DT", ascending=False).reset_index(drop=True)
+            except:
+                continue
+        return pd.DataFrame()
+
+    df = get_player_games_cached(str(pid))
+    if not df.empty:
+        df["Pts+Ast"] = df["PTS"] + df["AST"]
+        df["Pts+Reb"] = df["PTS"] + df["REB"]
+        df["Ast+Reb"] = df["AST"] + df["REB"]
+        df["Stl+Blk"] = df["STL"] + df["BLK"]
+        df["PRA"]     = df["PTS"] + df["REB"] + df["AST"]
+
+# ── Pin Button ──────────────────────────────────────────────────────────────────
+if (selected_player and selected_stat and selected_stat != "— Select stat —" and 
+    selected_stat in lines and df is not None and not df.empty and 
+    st.sidebar.button("📌 Pin to Board", use_container_width=True)):
 
     line = lines[selected_stat]
     pdata = df.sort_values("GAME_DATE_DT", ascending=False).copy()
@@ -229,6 +239,7 @@ if pin_clicked and selected_player and selected_stat and selected_stat != "— S
     hit_str = " | ".join(parts)
     recent_avg_min_val = pdata.head(10)["MIN"].mean()
 
+    # Current streak
     results = (pdata[selected_stat] > line).tolist()
     streak_type = "O" if results[0] else "U"
     streak_count = 0
@@ -263,8 +274,12 @@ if pin_clicked and selected_player and selected_stat and selected_stat != "— S
         "timestamp": datetime.now()
     }
 
-    if not any(e['player'] == entry['player'] and e['stat'] == entry['stat'] and e['line'] == entry['line'] 
-               for e in st.session_state.my_board):
+    if not any(
+        e['player'] == entry['player'] and 
+        e['stat'] == entry['stat'] and 
+        e['line'] == entry['line']
+        for e in st.session_state.my_board
+    ):
         st.session_state.my_board.append(entry)
         st.toast(f"Pinned → {selected_player} • {selected_stat} {line}", icon="📌")
         st.rerun()
@@ -333,35 +348,39 @@ if st.session_state.my_board:
 else:
     st.sidebar.caption("No props saved. Pin some above!")
 
-st.sidebar.divider()
 
-# ── Load Player Game Log ────────────────────────────────────────────────────────
-df = None
-if pid:
-    @st.cache_data(ttl=300)
-    def get_player_games_cached(pid_str):
-        for season in [CURRENT_SEASON, PREVIOUS_SEASON]:
-            try:
-                df_log = PlayerGameLog(
-                    player_id=pid_str, 
-                    season=season, 
-                    season_type_all_star='Regular Season'
-                ).get_data_frames()[0]
-                if not df_log.empty:
-                    df_log["GAME_DATE_DT"] = pd.to_datetime(df_log["GAME_DATE"])
-                    df_log["GAME_DATE"] = df_log["GAME_DATE_DT"].dt.strftime("%m/%d")
-                    return df_log.sort_values("GAME_DATE_DT", ascending=False).reset_index(drop=True)
-            except:
-                continue
-        return pd.DataFrame()
 
-    df = get_player_games_cached(str(pid))
-    if not df.empty:
-        df["Pts+Ast"] = df["PTS"] + df["AST"]
-        df["Pts+Reb"] = df["PTS"] + df["REB"]
-        df["Ast+Reb"] = df["AST"] + df["REB"]
-        df["Stl+Blk"] = df["STL"] + df["BLK"]
-        df["PRA"]     = df["PTS"] + df["REB"] + df["AST"]
+# ── Download / Upload Board ─────────────────────────────────────────────────────
+def get_board_json():
+    data = []
+    for entry in st.session_state.my_board:
+        item = entry.copy()
+        if isinstance(item.get('timestamp'), datetime):
+            item['timestamp'] = item['timestamp'].isoformat()
+        data.append(item)
+    return json.dumps(data)
+
+dynamic_filename = f"board_{datetime.now().strftime('%Y%m%d_%H%M')}.json"
+
+st.sidebar.download_button(
+    label="Download Board", 
+    data=get_board_json(), 
+    file_name=dynamic_filename, 
+    mime="application/json"
+)
+
+uploaded_file = st.sidebar.file_uploader("Upload Board", type="json")
+if uploaded_file is not None:
+    try:
+        data = json.load(uploaded_file)
+        for entry in data:
+            if isinstance(entry.get('timestamp'), str):
+                entry['timestamp'] = datetime.fromisoformat(entry['timestamp'])
+        st.session_state.my_board = data
+        st.sidebar.success("Board restored successfully!")
+        st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"Error loading file: {e}")
 
 # ── Main Content ────────────────────────────────────────────────────────────────
 if not selected_player or df is None or df.empty:
@@ -370,7 +389,7 @@ if not selected_player or df is None or df.empty:
 
 st.markdown("---")
 
-# Hit rate display + Charts
+# Hit rate display
 if lines:
     pdata = df.sort_values("GAME_DATE_DT", ascending=False).copy()
     
@@ -378,7 +397,11 @@ if lines:
         windows = [5, 10]
         windows = [w for w in windows if len(pdata) >= w]
         
-        over_list = [(pdata.head(w)[stat] > line).mean() * 100 for w in windows]
+        over_list = []
+        for w in windows:
+            recent_w = pdata.head(w)
+            hit_pct = (recent_w[stat] > line).mean() * 100
+            over_list.append(hit_pct)
         
         window_labels = [f"L{w}" for w in windows]
         parts = []
@@ -395,11 +418,12 @@ if lines:
         avg_text = f" AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / <span style='color:{avg_color_u}'>U {avg_u:.0f}%</span>"
         
         st.markdown(
-            f"<div style='background:#1e1e2e;padding:12px;border-radius:8px;margin:8px 0;'>"
+            f"<div style='background:#1e1e2e;padding:10px;border-radius:8px;margin:8px 0;'>"
             f"<strong>{stat} {line}</strong> {hit_str}{avg_text}</div>",
             unsafe_allow_html=True
         )
 
+        # Recent games bar chart
         if len(pdata) > 0:
             n = min(10, len(pdata))
             recent_data = pdata.head(n)
