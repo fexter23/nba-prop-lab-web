@@ -144,7 +144,7 @@ pid = get_player_id(selected_player) if selected_player else None
 player_team = player_team_map.get(str(pid), "???") if pid else "???"
 
 # ── Stat • Line • Odds (same line) ──────────────────────────────────────────────
-st.sidebar.markdown("### Stat • Line • Odds")
+
 
 available_stats = ['PTS', 'FG3M','AST','REB', 'Ast+Reb', 'STL', 'BLK', 'TOV', 'FGM', 'FGA',  
                    'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast', 'Stl+Blk', 'PRA']
