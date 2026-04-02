@@ -62,14 +62,13 @@ def get_todays_games(game_date: str):
 
 games_today, num_games = get_todays_games(today_str)
 
-# Matchup lookup
 matchup_lookup = {}
 for g in games_today:
     label = f"{g['away']} @ {g['home']}"
     matchup_lookup[g['away']] = label
     matchup_lookup[g['home']] = label
 
-# ── Helper Functions ────────────────────────────────────────────────────────────
+# ── Helpers ─────────────────────────────────────────────────────────────────────
 def dropdown_values():
     return [None] + [round(x, 1) for x in np.arange(0.5, 60.6, 1.0)]
 
@@ -79,7 +78,7 @@ def get_player_id(name):
             return p['id']
     return None
 
-# ── Sidebar: Game Filter + Player (same line) ───────────────────────────────────
+# ── Sidebar: Game Filter + Player ───────────────────────────────────────────────
 st.sidebar.markdown("### Today's Games & Player")
 
 top_filters = st.sidebar.columns([2.2, 2.8])
@@ -87,7 +86,6 @@ top_filters = st.sidebar.columns([2.2, 2.8])
 with top_filters[0]:
     game_options = ["— All Players —"]
     game_labels_to_teams = {"— All Players —": None}
-
     for g in games_today:
         label = f"{g['away']} @ {g['home']}  ({g['status']})"
         game_options.append(label)
@@ -123,12 +121,10 @@ with top_filters[1]:
     player_options = []
     for p in players.get_players():
         pid_str = str(p["id"])
-        if pid_str not in player_team_map:
-            continue
+        if pid_str not in player_team_map: continue
         team = player_team_map[pid_str]
-        if st.session_state.filter_teams is not None:
-            if team not in st.session_state.filter_teams:
-                continue
+        if st.session_state.filter_teams is not None and team not in st.session_state.filter_teams:
+            continue
         player_options.append((f"{p['full_name']} • {team}", p['full_name']))
 
     player_options.sort(key=lambda x: x[1].lower())
@@ -143,8 +139,8 @@ selected_player = next((clean for disp, clean in player_options if disp == selec
 pid = get_player_id(selected_player) if selected_player else None
 player_team = player_team_map.get(str(pid), "???") if pid else "???"
 
-# ── Stat • Line • Odds (same line) ──────────────────────────────────────────────
-
+# ── Stat • Line • Odds • Pin • Download • Upload ───────────────────────────────
+st.sidebar.markdown("### Stat • Line • Odds • Actions")
 
 available_stats = ['PTS', 'FG3M','AST','REB', 'Ast+Reb', 'STL', 'BLK', 'TOV', 'FGM', 'FGA',  
                    'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast', 'Stl+Blk', 'PRA']
@@ -160,30 +156,60 @@ odds_options = ["", "-300", "-275", "-250","-245","-240","-235","-230", "-225", 
 lines = {}
 selected_stat = None
 odds_key = None
+pin_clicked = False
 
 if selected_player:
-    col_stat, col_line, col_odds = st.sidebar.columns([1.8, 1.6, 1.6])
+    cols = st.sidebar.columns([1.4, 1.2, 1.2, 0.9, 0.9, 0.9])
     
-    with col_stat:
-        selected_stat = st.selectbox(
-            "Stat", ["— Select stat —"] + available_stats, 
-            index=1, key="stat_select", label_visibility="collapsed"
-        )
+    with cols[0]:
+        selected_stat = st.selectbox("Stat", ["— Select stat —"] + available_stats, 
+                                    index=1, key="stat_select", label_visibility="collapsed")
     
-    with col_line:
-        line_val = st.selectbox(
-            "Line", dropdown_values(), 
-            format_func=lambda x: "—" if x is None else f"{x:.1f}", 
-            key="line_key", label_visibility="collapsed"
-        )
+    with cols[1]:
+        line_val = st.selectbox("Line", dropdown_values(), 
+                               format_func=lambda x: "—" if x is None else f"{x:.1f}", 
+                               key="line_key", label_visibility="collapsed")
         if line_val is not None and selected_stat and selected_stat != "— Select stat —":
             lines[selected_stat] = line_val
     
-    with col_odds:
+    with cols[2]:
         odds_key = f"odds_{selected_player}_{selected_stat if selected_stat else 'none'}"
         st.selectbox("Odds", odds_options, key=odds_key, label_visibility="collapsed")
+    
+    with cols[3]:
+        pin_clicked = st.button("📌 Pin", use_container_width=True, type="primary")
+    
+    with cols[4]:
+        def get_board_json():
+            data = [entry.copy() for entry in st.session_state.my_board]
+            for item in data:
+                if isinstance(item.get('timestamp'), datetime):
+                    item['timestamp'] = item['timestamp'].isoformat()
+            return json.dumps(data)
+
+        st.download_button(
+            label="↓ Board",
+            data=get_board_json(),
+            file_name=f"board_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+            mime="application/json",
+            use_container_width=True
+        )
+    
+    with cols[5]:
+        uploaded_file = st.file_uploader("↑ Upload", type="json", label_visibility="collapsed")
+        if uploaded_file is not None:
+            try:
+                data = json.load(uploaded_file)
+                for entry in data:
+                    if isinstance(entry.get('timestamp'), str):
+                        entry['timestamp'] = datetime.fromisoformat(entry['timestamp'])
+                st.session_state.my_board = data
+                st.success("Board restored successfully!", icon="✅")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Upload failed: {e}")
 else:
-    st.sidebar.info("Select a player to load options")
+    st.sidebar.info("Select a player above")
 
 # ── Load Player Game Log ────────────────────────────────────────────────────────
 df = None
@@ -213,10 +239,9 @@ if pid:
         df["Stl+Blk"] = df["STL"] + df["BLK"]
         df["PRA"]     = df["PTS"] + df["REB"] + df["AST"]
 
-# ── Pin Button ──────────────────────────────────────────────────────────────────
-if (selected_player and selected_stat and selected_stat != "— Select stat —" and 
-    selected_stat in lines and df is not None and not df.empty and 
-    st.sidebar.button("📌 Pin to Board", use_container_width=True)):
+# ── Pin Logic ───────────────────────────────────────────────────────────────────
+if pin_clicked and selected_player and selected_stat and selected_stat != "— Select stat —" and \
+   selected_stat in lines and df is not None and not df.empty:
 
     line = lines[selected_stat]
     pdata = df.sort_values("GAME_DATE_DT", ascending=False).copy()
@@ -239,7 +264,6 @@ if (selected_player and selected_stat and selected_stat != "— Select stat —"
     hit_str = " | ".join(parts)
     recent_avg_min_val = pdata.head(10)["MIN"].mean()
 
-    # Current streak
     results = (pdata[selected_stat] > line).tolist()
     streak_type = "O" if results[0] else "U"
     streak_count = 0
@@ -254,11 +278,7 @@ if (selected_player and selected_stat and selected_stat != "— Select stat —"
     avg_color_o = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
     avg_color_u = '#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555'
     
-    avg_text = (
-        f" AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / "
-        f"<span style='color:{avg_color_u}'>U {avg_u:.0f}%</span> | "
-        f"**Avg MIN: {recent_avg_min_val:.1f}** | **{streak_type}{streak_count}**"
-    )
+    avg_text = f" AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / <span style='color:{avg_color_u}'>U {avg_u:.0f}%</span> | **Avg MIN: {recent_avg_min_val:.1f}** | **{streak_type}{streak_count}**"
     hitrate_str = hit_str + avg_text
 
     player_matchup = matchup_lookup.get(player_team, "Other/Unknown")
@@ -274,12 +294,7 @@ if (selected_player and selected_stat and selected_stat != "— Select stat —"
         "timestamp": datetime.now()
     }
 
-    if not any(
-        e['player'] == entry['player'] and 
-        e['stat'] == entry['stat'] and 
-        e['line'] == entry['line']
-        for e in st.session_state.my_board
-    ):
+    if not any(e['player'] == entry['player'] and e['stat'] == entry['stat'] and e['line'] == entry['line'] for e in st.session_state.my_board):
         st.session_state.my_board.append(entry)
         st.toast(f"Pinned → {selected_player} • {selected_stat} {line}", icon="📌")
         st.rerun()
@@ -348,39 +363,7 @@ if st.session_state.my_board:
 else:
     st.sidebar.caption("No props saved. Pin some above!")
 
-
-
-# ── Download / Upload Board ─────────────────────────────────────────────────────
-def get_board_json():
-    data = []
-    for entry in st.session_state.my_board:
-        item = entry.copy()
-        if isinstance(item.get('timestamp'), datetime):
-            item['timestamp'] = item['timestamp'].isoformat()
-        data.append(item)
-    return json.dumps(data)
-
-dynamic_filename = f"board_{datetime.now().strftime('%Y%m%d_%H%M')}.json"
-
-st.sidebar.download_button(
-    label="Download Board", 
-    data=get_board_json(), 
-    file_name=dynamic_filename, 
-    mime="application/json"
-)
-
-uploaded_file = st.sidebar.file_uploader("Upload Board", type="json")
-if uploaded_file is not None:
-    try:
-        data = json.load(uploaded_file)
-        for entry in data:
-            if isinstance(entry.get('timestamp'), str):
-                entry['timestamp'] = datetime.fromisoformat(entry['timestamp'])
-        st.session_state.my_board = data
-        st.sidebar.success("Board restored successfully!")
-        st.rerun()
-    except Exception as e:
-        st.sidebar.error(f"Error loading file: {e}")
+st.sidebar.divider()
 
 # ── Main Content ────────────────────────────────────────────────────────────────
 if not selected_player or df is None or df.empty:
@@ -392,16 +375,10 @@ st.markdown("---")
 # Hit rate display
 if lines:
     pdata = df.sort_values("GAME_DATE_DT", ascending=False).copy()
-    
     for stat, line in lines.items():
         windows = [5, 10]
         windows = [w for w in windows if len(pdata) >= w]
-        
-        over_list = []
-        for w in windows:
-            recent_w = pdata.head(w)
-            hit_pct = (recent_w[stat] > line).mean() * 100
-            over_list.append(hit_pct)
+        over_list = [(pdata.head(w)[stat] > line).mean() * 100 for w in windows]
         
         window_labels = [f"L{w}" for w in windows]
         parts = []
@@ -415,50 +392,39 @@ if lines:
         avg_color_o = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
         avg_color_u = '#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555'
         
-        avg_text = f" AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / <span style='color:{avg_color_u}'>U {avg_u:.0f}%</span>"
-        
         st.markdown(
-            f"<div style='background:#1e1e2e;padding:10px;border-radius:8px;margin:8px 0;'>"
-            f"<strong>{stat} {line}</strong> {hit_str}{avg_text}</div>",
+            f"<div style='background:#1e1e2e;padding:12px;border-radius:8px;margin:8px 0;'>"
+            f"<strong>{stat} {line}</strong> {hit_str} AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / "
+            f"<span style='color:{avg_color_u}'>U {avg_u:.0f}%</span></div>",
             unsafe_allow_html=True
         )
 
-        # Recent games bar chart
-        if len(pdata) > 0:
-            n = min(10, len(pdata))
-            recent_data = pdata.head(n)
-            res_main = (recent_data[stat] > line).tolist()
-            s_type = "O" if res_main[0] else "U"
-            s_count = 0
-            for r in res_main:
-                if (r and s_type == "O") or (not r and s_type == "U"):
-                    s_count += 1
-                else:
-                    break
-            
-            st.markdown(f"**Current Streak: {s_type}{s_count}**")
-            
-            fig = go.Figure()
-            colors = ["#00ff88" if v > line else "#ff4444" for v in recent_data[stat]]
-            text_colors = ["#000" if val > 10 else "#fff" for val in recent_data[stat]]
-            
-            fig.add_trace(go.Bar(
-                x=recent_data["GAME_DATE"],
-                y=recent_data[stat],
-                marker_color=colors,
-                text=recent_data[stat].round(1),
-                textposition="inside",
-                textfont={"color": text_colors}
-            ))
-            fig.add_hline(y=line, line_dash="dash", line_color="#00ffff",
-                          annotation_text=f"line = {line}", annotation_position="top right")
-            
-            fig.update_layout(
-                height=320, margin=dict(t=50, b=40, l=20, r=20),
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                font_color="#00e0ff", xaxis_title="Game Date", yaxis_title=stat
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        # Chart
+        n = min(10, len(pdata))
+        recent_data = pdata.head(n)
+        res_main = (recent_data[stat] > line).tolist()
+        s_type = "O" if res_main[0] else "U"
+        s_count = 0
+        for r in res_main:
+            if (r and s_type == "O") or (not r and s_type == "U"):
+                s_count += 1
+            else:
+                break
+        st.markdown(f"**Current Streak: {s_type}{s_count}**")
+
+        fig = go.Figure()
+        colors = ["#00ff88" if v > line else "#ff4444" for v in recent_data[stat]]
+        text_colors = ["#000" if val > 10 else "#fff" for val in recent_data[stat]]
+        fig.add_trace(go.Bar(
+            x=recent_data["GAME_DATE"], y=recent_data[stat],
+            marker_color=colors, text=recent_data[stat].round(1),
+            textposition="inside", textfont={"color": text_colors}
+        ))
+        fig.add_hline(y=line, line_dash="dash", line_color="#00ffff", 
+                      annotation_text=f"line = {line}", annotation_position="top right")
+        fig.update_layout(height=320, plot_bgcolor="rgba(0,0,0,0)", 
+                         paper_bgcolor="rgba(0,0,0,0)", font_color="#00e0ff")
+        st.plotly_chart(fig, use_container_width=True)
 
 # Minutes Projection
 recent_min = df.head(10)
@@ -468,12 +434,9 @@ if len(recent_min) >= 3:
     slope_min, intercept_min = np.polyfit(x_min, y_min, 1)
     recent_avg_min = recent_min["MIN"].mean()
     projected_min = recent_avg_min + slope_min
-
     concern_min = "🟢 Solid" if projected_min >= 32 else "🟡 Some concern" if projected_min >= 28 else "🔴 High risk"
     arrow_min = "↑" if slope_min > 0.3 else "↓" if slope_min < -0.3 else "→"
-    
-    st.markdown(f"**Projected Minutes**: ≈ **{projected_min:.1f}** | "
-                f"**Avg (L10)**: **{recent_avg_min:.1f}** ({arrow_min} {slope_min:.1f}) — **{concern_min}**")
+    st.markdown(f"**Projected Minutes**: ≈ **{projected_min:.1f}** | **Avg (L10)**: **{recent_avg_min:.1f}** ({arrow_min} {slope_min:.1f}) — **{concern_min}**")
 
 # Game Log
 with st.expander("📊 Full Recent Game Log (Last 15)", expanded=False):
@@ -485,10 +448,7 @@ with st.expander("📊 Full Recent Game Log (Last 15)", expanded=False):
         color = '#00cc88' if val >= 32 else '#ffcc00' if val >= 28 else '#ff5555'
         return f'background-color: {color}; color: black'
     
-    styled_df = df.head(15)[available_cols].style\
-        .format(precision=1)\
-        .map(highlight_minutes, subset=['MIN'] if 'MIN' in available_cols else [])
-    
+    styled_df = df.head(15)[available_cols].style.format(precision=1).map(highlight_minutes, subset=['MIN'] if 'MIN' in available_cols else [])
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
 st.markdown("<p style='text-align:center; color:#88f0ff; padding-top:2rem;'>ICE PROP LAB • 2025-26</p>", unsafe_allow_html=True)
