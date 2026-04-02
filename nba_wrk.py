@@ -348,7 +348,7 @@ if st.session_state.my_board:
 else:
     st.sidebar.caption("No props saved. Pin some above!")
 
-st.sidebar.divider()
+
 
 # ── Download / Upload Board ─────────────────────────────────────────────────────
 def get_board_json():
