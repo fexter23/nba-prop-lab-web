@@ -9,6 +9,17 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, date
+from PIL import Image 
+
+# ====================== FAVICON & PAGE CONFIG ======================
+# This MUST be the first Streamlit command in the entire script
+
+st.set_page_config(
+    page_title="MLB Batter Stats",
+    page_icon="🏀",                    # fallback emoji
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # ── Season helpers ──────────────────────────────────────────────────────────────
 def get_current_season():
