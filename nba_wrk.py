@@ -15,7 +15,7 @@ from PIL import Image
 # This MUST be the first Streamlit command in the entire script
 
 st.set_page_config(
-    page_title="MLB Batter Stats",
+    page_title="NBA Hit Tracker",
     page_icon="🏀",                    # fallback emoji
     layout="wide",
     initial_sidebar_state="expanded"
