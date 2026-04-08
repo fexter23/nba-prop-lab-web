@@ -36,7 +36,7 @@ st.set_page_config(page_title="NBA Hit Tracker", layout="wide", initial_sidebar_
 if 'my_board' not in st.session_state:
     st.session_state.my_board = []
 if 'filter_teams' not in st.session_state:
-    st.session_state.filter_teams = None 
+    st.session_state.filter_teams = None
 
 # ── Team abbreviation lookup ────────────────────────────────────────────────────
 @st.cache_data(ttl=86400)
@@ -145,8 +145,10 @@ with top_filters[1]:
     player_options.sort(key=lambda x: x[1].lower())
     player_list_display = [opt[0] for opt in player_options]
 
+    full_player_list = ["— Choose player —"] + player_list_display
+
     selected_display = st.selectbox(
-        "Player", ["— Choose player —"] + player_list_display,
+        "Player", full_player_list,
         key="player_select", label_visibility="collapsed"
     )
 
@@ -174,15 +176,20 @@ if selected_player:
     col_stat, col_line, col_odds = st.sidebar.columns([1.8, 1.6, 1.6])
     
     with col_stat:
+        stat_list = ["— Select stat —"] + available_stats
+        # Default to 'PTS' only if no value is already in session state
+        if "stat_select" not in st.session_state:
+            st.session_state["stat_select"] = available_stats[0]  # 'PTS'
         selected_stat = st.selectbox(
-            "Stat", ["— Select stat —"] + available_stats, 
-            index=1, key="stat_select", label_visibility="collapsed"
+            "Stat", stat_list,
+            key="stat_select", label_visibility="collapsed"
         )
     
     with col_line:
+        dv = dropdown_values()
         line_val = st.selectbox(
-            "Line", dropdown_values(), 
-            format_func=lambda x: "—" if x is None else f"{x:.1f}", 
+            "Line", dv,
+            format_func=lambda x: "—" if x is None else f"{x:.1f}",
             key="line_key", label_visibility="collapsed"
         )
         if line_val is not None and selected_stat and selected_stat != "— Select stat —":
@@ -328,7 +335,7 @@ if st.session_state.my_board:
             ):
                 group_sorted = group.sort_values(by='timestamp', ascending=False)
                 for _, entry in group_sorted.iterrows():
-                    col_t, col_d = st.columns([0.8, 0.2])
+                    col_t, col_load, col_d = st.columns([0.7, 0.15, 0.15])
                     with col_t:
                         odds_d = f" @ **{entry['odds']}**" if entry.get('odds') else ""
                         st.markdown(
@@ -337,6 +344,28 @@ if st.session_state.my_board:
                             f"<small>{entry.get('hitrate_str', '—')}</small>",
                             unsafe_allow_html=True
                         )
+                    with col_load:
+                        if st.button("🔍", key=f"load_{entry['player']}_{entry['stat']}_{str(entry.get('timestamp',''))}",
+                                     help=f"Load {entry['player']} • {entry['stat']} {entry['line']}"):
+                            # 1. Reset game filter to "All Players" so the player is always in the list
+                            st.session_state["game_filter_select"] = "— All Players —"
+                            st.session_state.filter_teams = None
+                            # 2. Build the full unfiltered player display string for this player
+                            _team = entry.get('team', '')
+                            _display = f"{entry['player']} • {_team}" if _team and _team != '???' else entry['player']
+                            # Find closest match in the full unfiltered player_team_map
+                            _pid = get_player_id(entry['player'])
+                            _abbr = player_team_map.get(str(_pid), '') if _pid else ''
+                            if _abbr:
+                                _display = f"{entry['player']} • {_abbr}"
+                            st.session_state["player_select"] = _display
+                            # 3. Set stat and line directly on their widget keys
+                            st.session_state["stat_select"] = entry['stat']
+                            try:
+                                st.session_state["line_key"] = float(entry['line'])
+                            except (ValueError, TypeError):
+                                pass
+                            st.rerun()
                     with col_d:
                         if st.button("🗑️", key=f"del_{entry['player']}_{entry['stat']}_{str(entry.get('timestamp',''))}"):
                             st.session_state.my_board = [
