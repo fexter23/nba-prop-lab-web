@@ -1,5 +1,3 @@
-# nba_wrk.py – NBA Hit Tracker • Single Player + Persistent Opponent + DvP Panel
-
 import streamlit as st
 import json
 from nba_api.stats.static import players
@@ -12,11 +10,9 @@ from datetime import datetime, date
 from PIL import Image 
 
 # ====================== FAVICON & PAGE CONFIG ======================
-# This MUST be the first Streamlit command in the entire script
-
 st.set_page_config(
     page_title="NBA Hit Tracker",
-    page_icon="🏀",                    # fallback emoji
+    page_icon="🏀",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -29,8 +25,6 @@ def get_current_season():
 CURRENT_SEASON = get_current_season()
 current_year = int(CURRENT_SEASON.split('-')[0])
 PREVIOUS_SEASON = f"{current_year - 1}-{str(current_year)[-2:]}"
-
-st.set_page_config(page_title="NBA Hit Tracker", layout="wide", initial_sidebar_state="expanded")
 
 # ── Session state ───────────────────────────────────────────────────────────────
 if 'my_board' not in st.session_state:
@@ -90,7 +84,17 @@ def get_player_id(name):
             return p['id']
     return None
 
-# ── Sidebar: Game Filter + Player (same line) ───────────────────────────────────
+def get_opponent_from_game(selected_game_label, player_team):
+    """Returns the opponent abbreviation for the selected game."""
+    if not selected_game_label or selected_game_label == "— All Players —":
+        return None
+    for g in games_today:
+        label = f"{g['away']} @ {g['home']}  ({g['status']})"
+        if label == selected_game_label:
+            return g['home'] if g['away'] == player_team else g['away']
+    return None
+
+# ── Sidebar: Game Filter + Player ───────────────────────────────────────────────
 st.sidebar.markdown("### Today's Games & Player")
 
 top_filters = st.sidebar.columns([2.2, 2.8])
@@ -154,7 +158,7 @@ selected_player = next((clean for disp, clean in player_options if disp == selec
 pid = get_player_id(selected_player) if selected_player else None
 player_team = player_team_map.get(str(pid), "???") if pid else "???"
 
-# ── Stat • Line • Odds (same line) ──────────────────────────────────────────────
+# ── Stat • Line • Odds ─────────────────────────────────────────────────────────
 available_stats = ['PTS', 'FG3M','AST','REB', 'Ast+Reb', 'STL', 'BLK', 'TOV', 'FGM', 'FGA',  
                    'FG3A', '2PM', '2PA', 'Pts+Reb', 'Pts+Ast', 'Stl+Blk', 'PRA']
 
@@ -239,7 +243,6 @@ if (selected_player and selected_stat and selected_stat != "— Select stat —"
         hit_pct = (recent_w[selected_stat] > line).mean() * 100
         over_list.append(hit_pct)
 
-    # Clean percentages only (no L5 / L10)
     parts = []
     for pct in over_list:
         color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
@@ -294,6 +297,7 @@ if (selected_player and selected_stat and selected_stat != "— Select stat —"
         st.rerun()
 
 # ── My Dashboard ────────────────────────────────────────────────────────────────
+# (Your existing dashboard code remains unchanged)
 if st.session_state.my_board:
     dash_df = pd.DataFrame(st.session_state.my_board)
     dash_df['match_key'] = dash_df['matchup']
@@ -396,7 +400,7 @@ if not selected_player or df is None or df.empty:
 
 st.markdown("---")
 
-# Hit rate display
+# Hit rate display + charts (your existing code)
 if lines:
     pdata = df.sort_values("GAME_DATE_DT", ascending=False).copy()
     
@@ -410,7 +414,6 @@ if lines:
             hit_pct = (recent_w[stat] > line).mean() * 100
             over_list.append(hit_pct)
         
-        # Clean percentages only (no L5 / L10)
         parts = []
         for pct in over_list:
             color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
@@ -430,21 +433,9 @@ if lines:
             unsafe_allow_html=True
         )
 
-        # Recent games bar chart
         if len(pdata) > 0:
             n = min(10, len(pdata))
             recent_data = pdata.head(n)
-            res_main = (recent_data[stat] > line).tolist()
-            s_type = "O" if res_main[0] else "U"
-            s_count = 0
-            for r in res_main:
-                if (r and s_type == "O") or (not r and s_type == "U"):
-                    s_count += 1
-                else:
-                    break
-            
-            st.markdown(f"**Current Streak: {s_type}{s_count}**")
-            
             fig = go.Figure()
             colors = ["#00ff88" if v > line else "#ff4444" for v in recent_data[stat]]
             text_colors = ["#000" if val > 10 else "#fff" for val in recent_data[stat]]
@@ -482,7 +473,57 @@ if len(recent_min) >= 3:
     st.markdown(f"**Projected Minutes**: ≈ **{projected_min:.1f}** | "
                 f"**Avg (L10)**: **{recent_avg_min:.1f}** ({arrow_min} {slope_min:.1f}) — **{concern_min}**")
 
-# Game Log
+# ====================== NEW: VS OPPONENT GAME LOG ======================
+opponent = get_opponent_from_game(selected_game_label, player_team)
+
+if opponent and df is not None and not df.empty:
+    st.markdown("---")
+    st.subheader(f"📊 **{selected_player} vs {opponent}** — {CURRENT_SEASON}")
+    
+    # Filter to current season
+    current_season_games = df[df['SEASON_ID'].str.contains(CURRENT_SEASON.split('-')[0], na=False)].copy()
+    
+    vs_opp = current_season_games[
+        current_season_games['MATCHUP'].str.contains(opponent, na=False)
+    ].copy()
+    
+    if not vs_opp.empty:
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            games_vs = len(vs_opp)
+            avg_pts = vs_opp["PTS"].mean()
+            avg_reb = vs_opp["REB"].mean()
+            avg_ast = vs_opp["AST"].mean()
+            avg_min = vs_opp["MIN"].mean()
+            
+            st.markdown(f"""
+            **Games**: {games_vs} | **MIN**: {avg_min:.1f} | **PTS**: {avg_pts:.1f} | **REB**: {avg_reb:.1f} | **AST**: {avg_ast:.1f}
+            """)
+        
+        with col2:
+            if selected_stat and selected_stat in lines:
+                line = lines[selected_stat]
+                hit_rate_vs = (vs_opp[selected_stat] > line).mean() * 100
+                color = '#00ff88' if hit_rate_vs > 65 else '#ffcc00' if hit_rate_vs >= 50 else '#ff5555'
+                st.markdown(f"**Hit Rate vs {opponent}**: <span style='color:{color}; font-size:1.2em;'><b>{hit_rate_vs:.0f}%</b></span>", 
+                           unsafe_allow_html=True)
+        
+        # Table
+        display_cols_vs = ["GAME_DATE", "MATCHUP", "WL", "MIN", "PTS", "REB", "AST", "STL", "BLK", "TOV", "FG3M", "FG3A", "+/-"]
+        available_vs = [c for c in display_cols_vs if c in vs_opp.columns]
+        
+        styled_vs = vs_opp[available_vs].style\
+            .format(precision=1)\
+            .map(lambda val: 'background-color: #00cc88; color: black' if pd.notna(val) and val >= 32 else '', 
+                 subset=['MIN'] if 'MIN' in available_vs else [])
+        
+        st.dataframe(styled_vs, use_container_width=True, hide_index=True)
+        
+    else:
+        st.info(f"No games against **{opponent}** in {CURRENT_SEASON} yet.")
+
+# ── Full Recent Game Log ────────────────────────────────────────────────────────
 with st.expander("📊 Full Recent Game Log (Last 15)", expanded=False):
     display_cols = ["GAME_DATE", "MATCHUP", "WL", "MIN", "PTS", "REB", "AST", "STL", "BLK", "TOV", "FG3M", "FG3A", "+/-"]
     available_cols = [c for c in display_cols if c in df.columns]
