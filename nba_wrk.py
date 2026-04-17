@@ -50,15 +50,24 @@ def get_todays_games(game_date: str):
         game_header_df = sb.game_header.get_data_frame()
         if game_header_df.empty: return [], 0
         game_header_df = game_header_df.drop_duplicates(subset=['GAME_ID'])
-        
+
         games = []
         for _, row in game_header_df.iterrows():
             visitor_id = str(row['VISITOR_TEAM_ID'])
             home_id    = str(row['HOME_TEAM_ID'])
+            # Detect game type from GAME_ID: '004' = playoffs, '005' = play-in, '002' = regular
+            game_id_str = str(row.get('GAME_ID', ''))
+            if game_id_str[3:5] == '04':
+                game_type = ' 🏆'
+            elif game_id_str[3:5] == '05':
+                game_type = ' 🎟️'
+            else:
+                game_type = ''
             games.append({
                 'away': team_abbr_map.get(visitor_id, '???'),
                 'home': team_abbr_map.get(home_id, '???'),
                 'status': row['GAME_STATUS_TEXT'],
+                'game_type': game_type,
             })
         return games, len(games)
     except Exception as e:
@@ -70,7 +79,7 @@ games_today, num_games = get_todays_games(today_str)
 # Matchup lookup
 matchup_lookup = {}
 for g in games_today:
-    label = f"{g['away']} @ {g['home']}"
+    label = f"{g['away']} @ {g['home']}{g.get('game_type', '')}"
     matchup_lookup[g['away']] = label
     matchup_lookup[g['home']] = label
 
@@ -89,7 +98,7 @@ def get_opponent_from_game(selected_game_label, player_team):
     if not selected_game_label or selected_game_label == "— All Players —":
         return None
     for g in games_today:
-        label = f"{g['away']} @ {g['home']}  ({g['status']})"
+        label = f"{g['away']} @ {g['home']}{g.get('game_type', '')}  ({g['status']})"
         if label == selected_game_label:
             return g['home'] if g['away'] == player_team else g['away']
     return None
@@ -104,7 +113,7 @@ with top_filters[0]:
     game_labels_to_teams = {"— All Players —": None}
 
     for g in games_today:
-        label = f"{g['away']} @ {g['home']}  ({g['status']})"
+        label = f"{g['away']} @ {g['home']}{g.get('game_type', '')}  ({g['status']})"
         game_options.append(label)
         game_labels_to_teams[label] = (g['away'], g['home'])
 
@@ -121,16 +130,21 @@ with top_filters[0]:
 with top_filters[1]:
     @st.cache_data(ttl=7200)
     def get_active_players_with_teams():
+        season_types = ["Playoffs", "PlayIn", "Regular Season"]
         for season in [CURRENT_SEASON, PREVIOUS_SEASON]:
-            try:
-                df = leaguedashplayerstats.LeagueDashPlayerStats(
-                    season=season, season_type_all_star="Regular Season"
-                ).get_data_frames()[0]
-                if not df.empty and len(df) > 80:
-                    df = df[df['TEAM_ABBREVIATION'].notna() & (df['TEAM_ABBREVIATION'] != '')]
-                    return dict(zip(df['PLAYER_ID'].astype(str), df['TEAM_ABBREVIATION']))
-            except:
-                continue
+            combined = {}
+            for stype in season_types:
+                try:
+                    df = leaguedashplayerstats.LeagueDashPlayerStats(
+                        season=season, season_type_all_star=stype
+                    ).get_data_frames()[0]
+                    if not df.empty:
+                        df = df[df['TEAM_ABBREVIATION'].notna() & (df['TEAM_ABBREVIATION'] != '')]
+                        combined.update(dict(zip(df['PLAYER_ID'].astype(str), df['TEAM_ABBREVIATION'])))
+                except:
+                    continue
+            if len(combined) > 80:
+                return combined
         return {}
 
     player_team_map = get_active_players_with_teams()
@@ -203,20 +217,36 @@ df = None
 if pid:
     @st.cache_data(ttl=300)
     def get_player_games_cached(pid_str):
+        season_types = [
+            ("Playoffs", "Playoffs"),
+            ("PlayIn", "Play-In"),
+            ("Regular Season", "Regular"),
+        ]
+        all_frames = []
         for season in [CURRENT_SEASON, PREVIOUS_SEASON]:
-            try:
-                df_log = PlayerGameLog(
-                    player_id=pid_str, 
-                    season=season, 
-                    season_type_all_star='Regular Season'
-                ).get_data_frames()[0]
-                if not df_log.empty:
-                    df_log["GAME_DATE_DT"] = pd.to_datetime(df_log["GAME_DATE"])
-                    df_log["GAME_DATE"] = df_log["GAME_DATE_DT"].dt.strftime("%m/%d")
-                    return df_log.sort_values("GAME_DATE_DT", ascending=False).reset_index(drop=True)
-            except:
-                continue
-        return pd.DataFrame()
+            for stype_api, stype_label in season_types:
+                try:
+                    df_log = PlayerGameLog(
+                        player_id=pid_str,
+                        season=season,
+                        season_type_all_star=stype_api
+                    ).get_data_frames()[0]
+                    if not df_log.empty:
+                        df_log["GAME_TYPE"] = stype_label
+                        all_frames.append(df_log)
+                except:
+                    continue
+            if all_frames:
+                break  # found data for current season, stop
+
+        if not all_frames:
+            return pd.DataFrame()
+
+        combined = pd.concat(all_frames, ignore_index=True)
+        combined["GAME_DATE_DT"] = pd.to_datetime(combined["GAME_DATE"])
+        combined["GAME_DATE"] = combined["GAME_DATE_DT"].dt.strftime("%m/%d")
+        combined = combined.drop_duplicates(subset=["GAME_ID"]) if "GAME_ID" in combined.columns else combined
+        return combined.sort_values("GAME_DATE_DT", ascending=False).reset_index(drop=True)
 
     df = get_player_games_cached(str(pid))
     if not df.empty:
@@ -510,7 +540,7 @@ if opponent and df is not None and not df.empty:
                            unsafe_allow_html=True)
         
         # Table
-        display_cols_vs = ["GAME_DATE", "MATCHUP", "WL", "MIN", "PTS", "REB", "AST", "STL", "BLK", "TOV", "FG3M", "FG3A", "+/-"]
+        display_cols_vs = ["GAME_DATE", "GAME_TYPE", "MATCHUP", "WL", "MIN", "PTS", "REB", "AST", "STL", "BLK", "TOV", "FG3M", "FG3A", "+/-"]
         available_vs = [c for c in display_cols_vs if c in vs_opp.columns]
         
         styled_vs = vs_opp[available_vs].style\
@@ -525,7 +555,7 @@ if opponent and df is not None and not df.empty:
 
 # ── Full Recent Game Log ────────────────────────────────────────────────────────
 with st.expander("📊 Full Recent Game Log (Last 15)", expanded=False):
-    display_cols = ["GAME_DATE", "MATCHUP", "WL", "MIN", "PTS", "REB", "AST", "STL", "BLK", "TOV", "FG3M", "FG3A", "+/-"]
+    display_cols = ["GAME_DATE", "GAME_TYPE", "MATCHUP", "WL", "MIN", "PTS", "REB", "AST", "STL", "BLK", "TOV", "FG3M", "FG3A", "+/-"]
     available_cols = [c for c in display_cols if c in df.columns]
     
     def highlight_minutes(val):
