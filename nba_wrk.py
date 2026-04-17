@@ -121,7 +121,6 @@ with top_filters[0]:
 with top_filters[1]:
     @st.cache_data(ttl=7200)
     def get_active_players_with_teams():
-        # Using regular season to find active player/team mapping
         for season in [CURRENT_SEASON, PREVIOUS_SEASON]:
             try:
                 df = leaguedashplayerstats.LeagueDashPlayerStats(
@@ -204,29 +203,20 @@ df = None
 if pid:
     @st.cache_data(ttl=300)
     def get_player_games_cached(pid_str):
-        all_logs = []
-        # UPDATED: Fetching both Regular Season and Playoffs for both seasons
         for season in [CURRENT_SEASON, PREVIOUS_SEASON]:
-            for stype in ['Regular Season', 'Playoffs']:
-                try:
-                    log = PlayerGameLog(
-                        player_id=pid_str, 
-                        season=season, 
-                        season_type_all_star=stype
-                    ).get_data_frames()[0]
-                    if not log.empty:
-                        all_logs.append(log)
-                except:
-                    continue
-        
-        if not all_logs:
-            return pd.DataFrame()
-            
-        # Combine and process
-        df_full = pd.concat(all_logs, ignore_index=True)
-        df_full["GAME_DATE_DT"] = pd.to_datetime(df_full["GAME_DATE"])
-        df_full["GAME_DATE"] = df_full["GAME_DATE_DT"].dt.strftime("%m/%d")
-        return df_full.sort_values("GAME_DATE_DT", ascending=False).reset_index(drop=True)
+            try:
+                df_log = PlayerGameLog(
+                    player_id=pid_str, 
+                    season=season, 
+                    season_type_all_star='Regular Season'
+                ).get_data_frames()[0]
+                if not df_log.empty:
+                    df_log["GAME_DATE_DT"] = pd.to_datetime(df_log["GAME_DATE"])
+                    df_log["GAME_DATE"] = df_log["GAME_DATE_DT"].dt.strftime("%m/%d")
+                    return df_log.sort_values("GAME_DATE_DT", ascending=False).reset_index(drop=True)
+            except:
+                continue
+        return pd.DataFrame()
 
     df = get_player_games_cached(str(pid))
     if not df.empty:
@@ -271,7 +261,7 @@ if (selected_player and selected_stat and selected_stat != "— Select stat —"
         else:
             break
 
-    avg_o = np.mean(over_list) if over_list else 0
+    avg_o = np.mean(over_list)
     avg_u = 100 - avg_o
     avg_color_o = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
     avg_color_u = '#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555'
@@ -307,6 +297,7 @@ if (selected_player and selected_stat and selected_stat != "— Select stat —"
         st.rerun()
 
 # ── My Dashboard ────────────────────────────────────────────────────────────────
+# (Your existing dashboard code remains unchanged)
 if st.session_state.my_board:
     dash_df = pd.DataFrame(st.session_state.my_board)
     dash_df['match_key'] = dash_df['matchup']
@@ -409,7 +400,7 @@ if not selected_player or df is None or df.empty:
 
 st.markdown("---")
 
-# Hit rate display + charts
+# Hit rate display + charts (your existing code)
 if lines:
     pdata = df.sort_values("GAME_DATE_DT", ascending=False).copy()
     
@@ -429,7 +420,7 @@ if lines:
             parts.append(f"<span style='color:{color}'>{pct:.0f}%</span>")
         
         hit_str = " | ".join(parts)
-        avg_o = np.mean(over_list) if over_list else 0
+        avg_o = np.mean(over_list)
         avg_u = 100 - avg_o
         avg_color_o = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
         avg_color_u = '#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555'
@@ -443,7 +434,7 @@ if lines:
         )
 
         if len(pdata) > 0:
-            n = min(15, len(pdata))
+            n = min(10, len(pdata))
             recent_data = pdata.head(n)
             fig = go.Figure()
             colors = ["#00ff88" if v > line else "#ff4444" for v in recent_data[stat]]
@@ -482,14 +473,19 @@ if len(recent_min) >= 3:
     st.markdown(f"**Projected Minutes**: ≈ **{projected_min:.1f}** | "
                 f"**Avg (L10)**: **{recent_avg_min:.1f}** ({arrow_min} {slope_min:.1f}) — **{concern_min}**")
 
-# ====================== VS OPPONENT GAME LOG ======================
+# ====================== NEW: VS OPPONENT GAME LOG ======================
 opponent = get_opponent_from_game(selected_game_label, player_team)
 
 if opponent and df is not None and not df.empty:
     st.markdown("---")
-    st.subheader(f"📊 **{selected_player} vs {opponent}** (All Games)")
+    st.subheader(f"📊 **{selected_player} vs {opponent}** — {CURRENT_SEASON}")
     
-    vs_opp = df[df['MATCHUP'].str.contains(opponent, na=False)].copy()
+    # Filter to current season
+    current_season_games = df[df['SEASON_ID'].str.contains(CURRENT_SEASON.split('-')[0], na=False)].copy()
+    
+    vs_opp = current_season_games[
+        current_season_games['MATCHUP'].str.contains(opponent, na=False)
+    ].copy()
     
     if not vs_opp.empty:
         col1, col2 = st.columns([3, 1])
@@ -525,10 +521,10 @@ if opponent and df is not None and not df.empty:
         st.dataframe(styled_vs, use_container_width=True, hide_index=True)
         
     else:
-        st.info(f"No games against **{opponent}** in the full dataset.")
+        st.info(f"No games against **{opponent}** in {CURRENT_SEASON} yet.")
 
 # ── Full Recent Game Log ────────────────────────────────────────────────────────
-with st.expander("📊 Full Recent Game Log (Inc. Playoffs - Last 15)", expanded=False):
+with st.expander("📊 Full Recent Game Log (Last 15)", expanded=False):
     display_cols = ["GAME_DATE", "MATCHUP", "WL", "MIN", "PTS", "REB", "AST", "STL", "BLK", "TOV", "FG3M", "FG3A", "+/-"]
     available_cols = [c for c in display_cols if c in df.columns]
     
