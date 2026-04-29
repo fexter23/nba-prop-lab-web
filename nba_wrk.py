@@ -2,7 +2,7 @@ import streamlit as st
 import json
 from nba_api.stats.static import players
 from nba_api.stats.static import teams as static_teams
-from nba_api.stats.endpoints import leaguedashplayerstats, PlayerGameLog, scoreboardv2
+from nba_api.stats.endpoints import leaguedashplayerstats, leaguedashteamstats, PlayerGameLog, scoreboardv2
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -30,7 +30,11 @@ PREVIOUS_SEASON = f"{current_year - 1}-{str(current_year)[-2:]}"
 if 'my_board' not in st.session_state:
     st.session_state.my_board = []
 if 'filter_teams' not in st.session_state:
-    st.session_state.filter_teams = None 
+    st.session_state.filter_teams = None
+if 'pending_load' not in st.session_state:
+    st.session_state.pending_load = None
+if 'board_order' not in st.session_state:
+    st.session_state.board_order = []  # list of (player, stat, line) tuples defining sort order
 
 # ── Team abbreviation lookup ────────────────────────────────────────────────────
 @st.cache_data(ttl=86400)
@@ -39,6 +43,80 @@ def get_team_abbr_map():
     return {str(t['id']): t['abbreviation'] for t in all_teams}
 
 team_abbr_map = get_team_abbr_map()
+
+# ── Opponent Defensive Rankings ─────────────────────────────────────────────────
+# Maps stat category → NBA API column → label
+DEF_STAT_MAP = {
+    'PTS':     ('OPP_PTS',   'PTS allowed'),
+    'REB':     ('OPP_REB',   'REB allowed'),
+    'AST':     ('OPP_AST',   'AST allowed'),
+    'STL':     ('OPP_STL',   'STL allowed'),
+    'BLK':     ('OPP_BLK',   'BLK allowed'),
+    'TOV':     ('OPP_TOV',   'TOV forced'),
+    'FG3M':    ('OPP_FG3M',  '3PM allowed'),
+    'Pts+Reb': ('OPP_PTS',   'PTS allowed'),   # fallback to PTS
+    'Pts+Ast': ('OPP_PTS',   'PTS allowed'),
+    'PRA':     ('OPP_PTS',   'PTS allowed'),
+    'Ast+Reb': ('OPP_AST',   'AST allowed'),
+    'Stl+Blk': ('OPP_STL',   'STL allowed'),
+}
+
+@st.cache_data(ttl=3600)
+def get_opp_def_rankings(season: str):
+    """Returns dict: team_abbr → {col: (rank, per_game_avg, total_teams)}"""
+    try:
+        df_opp = leaguedashteamstats.LeagueDashTeamStats(
+            season=season,
+            measure_type_detailed_defense="Opponent",
+            per_mode_simple="PerGame",
+        ).get_data_frames()[0]
+        if df_opp.empty:
+            return {}
+        result = {}
+        opp_cols = [c for c in df_opp.columns if c.startswith('OPP_')]
+        for col in opp_cols:
+            if col not in df_opp.columns:
+                continue
+            # Lower is better defensively for most stats (fewer allowed)
+            # Exception: OPP_TOV — more TOV forced = better defense
+            ascending = col != 'OPP_TOV'
+            ranked = df_opp[['TEAM_ABBREVIATION', col]].copy()
+            ranked['rank'] = ranked[col].rank(method='min', ascending=ascending).astype(int)
+            for _, row in ranked.iterrows():
+                abbr = row['TEAM_ABBREVIATION']
+                if abbr not in result:
+                    result[abbr] = {}
+                result[abbr][col] = (int(row['rank']), round(float(row[col]), 1), len(ranked))
+        return result
+    except Exception:
+        return {}
+
+def get_def_rank_badge(opp_team: str, stat: str, rankings: dict) -> str:
+    """Returns an HTML badge string for defensive rank of opp_team vs stat."""
+    if not opp_team or not rankings or opp_team not in rankings:
+        return ""
+    api_col, label = DEF_STAT_MAP.get(stat, (None, None))
+    if not api_col:
+        return ""
+    team_data = rankings.get(opp_team, {})
+    if api_col not in team_data:
+        return ""
+    rank, avg, total = team_data[api_col]
+    # Color: top 10 = green (easy), bottom 10 = red (tough), else yellow
+    if rank <= 10:
+        color = '#00ff88'
+        difficulty = 'Easy'
+    elif rank >= total - 9:
+        color = '#ff5555'
+        difficulty = 'Tough'
+    else:
+        color = '#ffcc00'
+        difficulty = 'Mid'
+    return (
+        f"<span style='background:{color};color:#000;padding:1px 6px;"
+        f"border-radius:4px;font-size:0.78em;font-weight:700;'>"
+        f"DEF #{rank}/{total} {difficulty} ({avg} {label}/g)</span>"
+    )
 
 # ── Today's NBA Games ───────────────────────────────────────────────────────────
 today_str = date.today().strftime("%Y-%m-%d")
@@ -102,6 +180,37 @@ def get_opponent_from_game(selected_game_label, player_team):
         if label == selected_game_label:
             return g['home'] if g['away'] == player_team else g['away']
     return None
+
+# ── Apply pending_load (from clicking a pinned prop) ────────────────────────────
+if st.session_state.pending_load is not None:
+    _pl = st.session_state.pending_load
+    st.session_state.pending_load = None
+    # Game filter: find the matching label for the player's team
+    _team = _pl.get('team')
+    _matched_game = "— All Players —"
+    for g in games_today:
+        label = f"{g['away']} @ {g['home']}{g.get('game_type', '')}  ({g['status']})"
+        if _team and _team in (g['away'], g['home']):
+            _matched_game = label
+            break
+    st.session_state['game_filter_select'] = _matched_game
+    # Player: find matching display string (name • team)
+    _player_name = _pl.get('player')
+    _player_team = _pl.get('team')
+    _player_display = f"{_player_name} • {_player_team}" if _player_name and _player_team else None
+    if _player_display:
+        st.session_state['player_select'] = _player_display
+    # Stat
+    _stat = _pl.get('stat')
+    if _stat:
+        st.session_state['stat_select'] = _stat
+    # Line
+    _line = _pl.get('line')
+    if _line is not None:
+        try:
+            st.session_state['line_key'] = float(_line)
+        except (ValueError, TypeError):
+            pass
 
 # ── Sidebar: Game Filter + Player ───────────────────────────────────────────────
 st.sidebar.markdown("### Today's Games & Player")
@@ -295,11 +404,26 @@ if (selected_player and selected_stat and selected_stat != "— Select stat —"
     avg_u = 100 - avg_o
     avg_color_o = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
     avg_color_u = '#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555'
+
+    # Trend arrow: compare L5 avg vs L6-10 avg to detect hot/cold
+    trend_arrow = "→"
+    trend_color = "#ffcc00"
+    if len(pdata) >= 6:
+        l5_avg  = pdata.head(5)[selected_stat].mean()
+        l10_avg = pdata.head(10)[selected_stat].mean() if len(pdata) >= 10 else pdata[5:][selected_stat].mean()
+        diff = l5_avg - l10_avg
+        threshold = max(line * 0.08, 0.5)   # 8% of line or at least 0.5
+        if diff > threshold:
+            trend_arrow = "↑"
+            trend_color = "#00ff88"
+        elif diff < -threshold:
+            trend_arrow = "↓"
+            trend_color = "#ff5555"
     
     avg_text = (
-        f" AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / "
+        f" | Avg: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / "
         f"<span style='color:{avg_color_u}'>U {avg_u:.0f}%</span> | "
-        f"**Avg MIN: {recent_avg_min_val:.1f}** | **{streak_type}{streak_count}**"
+        f"<span style='color:#fff;'> Avg MIN: {recent_avg_min_val:.1f} | {streak_type}{streak_count}</span>"
     )
     hitrate_str = hit_str + avg_text
 
@@ -313,7 +437,10 @@ if (selected_player and selected_stat and selected_stat != "— Select stat —"
         "line": f"{line:.1f}",
         "odds": st.session_state.get(odds_key, ""),
         "hitrate_str": hitrate_str,
-        "timestamp": datetime.now()
+        "timestamp": datetime.now(),
+        "trend_arrow": trend_arrow,
+        "trend_color": trend_color,
+        "sort_order": len(st.session_state.my_board),
     }
 
     if not any(
@@ -327,11 +454,53 @@ if (selected_player and selected_stat and selected_stat != "— Select stat —"
         st.rerun()
 
 # ── My Dashboard ────────────────────────────────────────────────────────────────
-# (Your existing dashboard code remains unchanged)
 if st.session_state.my_board:
     dash_df = pd.DataFrame(st.session_state.my_board)
+    # Ensure sort_order exists for older pinned entries
+    if 'sort_order' not in dash_df.columns:
+        dash_df['sort_order'] = range(len(dash_df))
+        for i, entry in enumerate(st.session_state.my_board):
+            entry.setdefault('sort_order', i)
     dash_df['match_key'] = dash_df['matchup']
-    
+
+    def _move_prop(player, stat, line, direction):
+        """Swap sort_order of the target prop with its neighbour within the same matchup."""
+        board = st.session_state.my_board
+        matchup = next((e['matchup'] for e in board if e['player']==player and e['stat']==stat and e['line']==line), None)
+        if matchup is None:
+            return
+        group = sorted([e for e in board if e['matchup']==matchup], key=lambda x: x.get('sort_order', 0))
+        idx = next((i for i, e in enumerate(group) if e['player']==player and e['stat']==stat and e['line']==line), None)
+        if idx is None:
+            return
+        swap_idx = idx + direction
+        if swap_idx < 0 or swap_idx >= len(group):
+            return
+        # Swap sort_order values
+        a_key = (group[idx]['player'],  group[idx]['stat'],  group[idx]['line'])
+        b_key = (group[swap_idx]['player'], group[swap_idx]['stat'], group[swap_idx]['line'])
+        a_order = group[idx].get('sort_order', idx)
+        b_order = group[swap_idx].get('sort_order', swap_idx)
+        for e in board:
+            if (e['player'], e['stat'], e['line']) == a_key:
+                e['sort_order'] = b_order
+            elif (e['player'], e['stat'], e['line']) == b_key:
+                e['sort_order'] = a_order
+
+    # Compact CSS injected once
+    st.sidebar.markdown("""
+<style>
+/* tighten expander padding */
+[data-testid="stExpander"] details { padding: 0 !important; }
+[data-testid="stExpander"] summary { padding: 4px 8px !important; font-size:0.82em !important; }
+/* shrink button height */
+div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
+    padding: 1px 5px !important; font-size: 0.75em !important; min-height: 0 !important; height: 22px !important;
+}
+/* tighten spacing between board rows */
+.prop-row { margin: 0; padding: 2px 0; line-height: 1.3; }
+</style>""", unsafe_allow_html=True)
+
     for match, group in dash_df.groupby('match_key'):
         total_payout = 1.0
         try:
@@ -340,49 +509,77 @@ if st.session_state.my_board:
                 o = row['odds']
                 if not o or o.strip() == "": continue
                 val = float(str(o).replace('+', ''))
-                if val > 0:
-                    multiplier *= (val / 100 + 1)
-                else:
-                    multiplier *= (100 / abs(val) + 1)
+                multiplier *= (val / 100 + 1) if val > 0 else (100 / abs(val) + 1)
             total_payout = multiplier
         except:
             total_payout = 1.0
 
         prop_count = len(group)
-
-        col_left, col_middle, col_right = st.sidebar.columns([0.12, 0.76, 0.12])
+        col_left, col_middle, col_right = st.sidebar.columns([0.09, 0.79, 0.12])
 
         with col_left:
             st.checkbox("", key=f"check_{match}", label_visibility="collapsed")
 
         with col_middle:
             with st.expander(
-                f"🏀 {match} | :green[${total_payout:.2f}] | ({prop_count})",
+                f"🏀 {match}  💰{total_payout:.2f}x  ({prop_count})",
                 expanded=True
             ):
-                group_sorted = group.sort_values(by='timestamp', ascending=False)
-                for _, entry in group_sorted.iterrows():
-                    col_t, col_d = st.columns([0.8, 0.2])
-                    with col_t:
-                        odds_d = f" @ **{entry['odds']}**" if entry.get('odds') else ""
-                        st.markdown(
-                            f"**{entry['player']} • {entry['team']}**"
-                            f" | > {entry['stat']} {entry['line']}{odds_d}<br>"
-                            f"<small>{entry.get('hitrate_str', '—')}</small>",
-                            unsafe_allow_html=True
-                        )
-                    with col_d:
-                        if st.button("🗑️", key=f"del_{entry['player']}_{entry['stat']}_{str(entry.get('timestamp',''))}"):
+                group_sorted = group.sort_values(by='sort_order', ascending=True)
+                group_list   = list(group_sorted.iterrows())
+
+                for i, (_, entry) in enumerate(group_list):
+                    is_first = (i == 0)
+                    is_last  = (i == len(group_list) - 1)
+
+                    t_arrow = entry.get('trend_arrow', '→')
+                    t_color = entry.get('trend_color', '#ffcc00')
+                    odds_d  = f" <span style='color:#aaa'>@ {entry['odds']}</span>" if entry.get('odds') else ""
+
+                    # Compact single-block prop card
+                    st.markdown(
+                        f"<div class='prop-row' style='border-left:2px solid {t_color};padding-left:5px;margin-bottom:3px'>"
+                        f"<span style='color:{t_color};font-weight:700'>{t_arrow}</span> "
+                        f"<strong style='font-size:0.85em'>{entry['player']} <span style='color:#88aaff'>•</span> {entry['team']}</strong>"
+                        f"<span style='font-size:0.82em'> &gt; {entry['stat']} {entry['line']}{odds_d}</span><br>"
+                        f"<span style='font-size:0.72em;color:#aaa'>{entry.get('hitrate_str','—')}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+
+                    # Action row: ↑ ↓ 🔍 🗑 all inline, minimal height
+                    btn_cols = st.columns([0.18, 0.18, 0.32, 0.32])
+                    with btn_cols[0]:
+                        if not is_first:
+                            if st.button("↑", key=f"up_{entry['player']}_{entry['stat']}_{entry['line']}_{i}", help="Move up"):
+                                _move_prop(entry['player'], entry['stat'], entry['line'], -1)
+                                st.rerun()
+                    with btn_cols[1]:
+                        if not is_last:
+                            if st.button("↓", key=f"dn_{entry['player']}_{entry['stat']}_{entry['line']}_{i}", help="Move down"):
+                                _move_prop(entry['player'], entry['stat'], entry['line'], +1)
+                                st.rerun()
+                    with btn_cols[2]:
+                        if st.button("🔍 Load", key=f"load_{entry['player']}_{entry['stat']}_{str(entry.get('timestamp',''))}", help="Load this prop", use_container_width=True):
+                            st.session_state.pending_load = {
+                                'player': entry['player'],
+                                'team':   entry['team'],
+                                'stat':   entry['stat'],
+                                'line':   entry['line'],
+                            }
+                            st.rerun()
+                    with btn_cols[3]:
+                        if st.button("🗑 Del", key=f"del_{entry['player']}_{entry['stat']}_{str(entry.get('timestamp',''))}", help="Remove prop", use_container_width=True):
                             st.session_state.my_board = [
                                 d for d in st.session_state.my_board
-                                if not (d['player'] == entry['player'] and 
-                                        d['stat'] == entry['stat'] and 
-                                        d['line'] == entry['line'])
+                                if not (d['player'] == entry['player'] and
+                                        d['stat']   == entry['stat']   and
+                                        d['line']   == entry['line'])
                             ]
                             st.rerun()
 
         with col_right:
-            if st.button("x", key=f"del_group_{match}", help="Delete entire group"):
+            if st.button("✕", key=f"del_group_{match}", help="Delete entire group"):
                 st.session_state.my_board = [
                     d for d in st.session_state.my_board
                     if d['matchup'] != match
@@ -428,6 +625,10 @@ if not selected_player or df is None or df.empty:
     st.info("Select a player from the sidebar to get started.")
     st.stop()
 
+# Load defensive rankings (cached, non-blocking)
+def_rankings = get_opp_def_rankings(CURRENT_SEASON)
+opponent = get_opponent_from_game(selected_game_label, player_team)
+
 st.markdown("---")
 
 # Hit rate display + charts (your existing code)
@@ -455,11 +656,18 @@ if lines:
         avg_color_o = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
         avg_color_u = '#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555'
         
-        avg_text = f" AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / <span style='color:{avg_color_u}'>U {avg_u:.0f}%</span>"
+        avg_text = f" AVG: <span style=\'color:{avg_color_o}\'>O {avg_o:.0f}%</span> / <span style=\'color:{avg_color_u}\'>U {avg_u:.0f}%</span>"
+        
+        # Defensive rank badge for this stat vs today's opponent
+        badge_html = ""
+        if opponent:
+            badge_html = get_def_rank_badge(opponent, stat, def_rankings)
+            if badge_html:
+                badge_html = f" &nbsp;{badge_html}"
         
         st.markdown(
-            f"<div style='background:#1e1e2e;padding:10px;border-radius:8px;margin:8px 0;'>"
-            f"<strong>{stat} {line}</strong> {hit_str}{avg_text}</div>",
+            f"<div style=\'background:#1e1e2e;padding:10px;border-radius:8px;margin:8px 0;\'>"
+            f"<strong>{stat} {line}</strong>\u2003{hit_str}{avg_text}{badge_html}</div>",
             unsafe_allow_html=True
         )
 
@@ -504,11 +712,16 @@ if len(recent_min) >= 3:
                 f"**Avg (L10)**: **{recent_avg_min:.1f}** ({arrow_min} {slope_min:.1f}) — **{concern_min}**")
 
 # ====================== NEW: VS OPPONENT GAME LOG ======================
-opponent = get_opponent_from_game(selected_game_label, player_team)
 
 if opponent and df is not None and not df.empty:
     st.markdown("---")
+    # Defensive rank badge for the selected stat vs this opponent
+    def_badge = ""
+    if selected_stat and selected_stat != "— Select stat —":
+        def_badge = get_def_rank_badge(opponent, selected_stat, def_rankings)
     st.subheader(f"📊 **{selected_player} vs {opponent}** — {CURRENT_SEASON}")
+    if def_badge:
+        st.markdown(f"**{opponent} Defense** — {selected_stat}: {def_badge}", unsafe_allow_html=True)
     
     # Filter to current season
     current_season_games = df[df['SEASON_ID'].str.contains(CURRENT_SEASON.split('-')[0], na=False)].copy()
@@ -539,11 +752,43 @@ if opponent and df is not None and not df.empty:
                 st.markdown(f"**Hit Rate vs {opponent}**: <span style='color:{color}; font-size:1.2em;'><b>{hit_rate_vs:.0f}%</b></span>", 
                            unsafe_allow_html=True)
         
+        # Shooting % vs opponent
+        shoot_parts = []
+        if "FGM" in vs_opp.columns and "FGA" in vs_opp.columns and vs_opp["FGA"].sum() > 0:
+            fg3m_sum = vs_opp["FG3M"].sum() if "FG3M" in vs_opp.columns else 0
+            fg3a_sum = vs_opp["FG3A"].sum() if "FG3A" in vs_opp.columns else 0
+            fg2m = vs_opp["FGM"].sum() - fg3m_sum
+            fg2a = vs_opp["FGA"].sum() - fg3a_sum
+            if fg2a > 0:
+                shoot_parts.append(f"**2P%**: {fg2m/fg2a*100:.1f}% ({fg2m:.0f}/{fg2a:.0f})")
+        if "FG3M" in vs_opp.columns and "FG3A" in vs_opp.columns and vs_opp["FG3A"].sum() > 0:
+            fg3m = vs_opp["FG3M"].sum()
+            fg3a = vs_opp["FG3A"].sum()
+            shoot_parts.append(f"**3P%**: {fg3m/fg3a*100:.1f}% ({fg3m:.0f}/{fg3a:.0f})")
+        if "FTM" in vs_opp.columns and "FTA" in vs_opp.columns and vs_opp["FTA"].sum() > 0:
+            ftm = vs_opp["FTM"].sum()
+            fta = vs_opp["FTA"].sum()
+            shoot_parts.append(f"**FT%**: {ftm/fta*100:.1f}% ({ftm:.0f}/{fta:.0f})")
+        if shoot_parts:
+            st.markdown(" | ".join(shoot_parts))
+
+        # Compute combo stats for display
+        vs_opp_disp = vs_opp.copy()
+        for col, a, b in [("Pts+Reb", "PTS", "REB"), ("Pts+Ast", "PTS", "AST"),
+                          ("Ast+Reb", "AST", "REB"), ("Stl+Blk", "STL", "BLK")]:
+            if a in vs_opp_disp.columns and b in vs_opp_disp.columns:
+                vs_opp_disp[col] = vs_opp_disp[a] + vs_opp_disp[b]
+        if all(c in vs_opp_disp.columns for c in ["PTS", "REB", "AST"]):
+            vs_opp_disp["PRA"] = vs_opp_disp["PTS"] + vs_opp_disp["REB"] + vs_opp_disp["AST"]
+
         # Table
-        display_cols_vs = ["GAME_DATE", "GAME_TYPE", "MATCHUP", "WL", "MIN", "PTS", "REB", "AST", "STL", "BLK", "TOV", "FG3M", "FG3A", "+/-"]
-        available_vs = [c for c in display_cols_vs if c in vs_opp.columns]
+        display_cols_vs = ["GAME_DATE", "GAME_TYPE", "MATCHUP", "WL", "MIN",
+                           "PTS", "REB", "AST", "STL", "BLK", "TOV",
+                           "Pts+Reb", "Pts+Ast", "Ast+Reb", "Stl+Blk", "PRA",
+                           "FG3M", "FG3A", "+/-"]
+        available_vs = [c for c in display_cols_vs if c in vs_opp_disp.columns]
         
-        styled_vs = vs_opp[available_vs].style\
+        styled_vs = vs_opp_disp[available_vs].style\
             .format(precision=1)\
             .map(lambda val: 'background-color: #00cc88; color: black' if pd.notna(val) and val >= 32 else '', 
                  subset=['MIN'] if 'MIN' in available_vs else [])
@@ -555,15 +800,26 @@ if opponent and df is not None and not df.empty:
 
 # ── Full Recent Game Log ────────────────────────────────────────────────────────
 with st.expander("📊 Full Recent Game Log (Last 15)", expanded=False):
-    display_cols = ["GAME_DATE", "GAME_TYPE", "MATCHUP", "WL", "MIN", "PTS", "REB", "AST", "STL", "BLK", "TOV", "FG3M", "FG3A", "+/-"]
-    available_cols = [c for c in display_cols if c in df.columns]
+    df_disp = df.copy()
+    for col, a, b in [("Pts+Reb", "PTS", "REB"), ("Pts+Ast", "PTS", "AST"),
+                      ("Ast+Reb", "AST", "REB"), ("Stl+Blk", "STL", "BLK")]:
+        if a in df_disp.columns and b in df_disp.columns:
+            df_disp[col] = df_disp[a] + df_disp[b]
+    if all(c in df_disp.columns for c in ["PTS", "REB", "AST"]):
+        df_disp["PRA"] = df_disp["PTS"] + df_disp["REB"] + df_disp["AST"]
+
+    display_cols = ["GAME_DATE", "GAME_TYPE", "MATCHUP", "WL", "MIN",
+                    "PTS", "REB", "AST", "STL", "BLK", "TOV",
+                    "Pts+Reb", "Pts+Ast", "Ast+Reb", "Stl+Blk", "PRA",
+                    "FG3M", "FG3A", "+/-"]
+    available_cols = [c for c in display_cols if c in df_disp.columns]
     
     def highlight_minutes(val):
         if pd.isna(val): return ''
         color = '#00cc88' if val >= 32 else '#ffcc00' if val >= 28 else '#ff5555'
         return f'background-color: {color}; color: black'
     
-    styled_df = df.head(15)[available_cols].style\
+    styled_df = df_disp.head(15)[available_cols].style\
         .format(precision=1)\
         .map(highlight_minutes, subset=['MIN'] if 'MIN' in available_cols else [])
     
