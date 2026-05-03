@@ -352,7 +352,9 @@ if pid:
             return pd.DataFrame()
 
         combined = pd.concat(all_frames, ignore_index=True)
-        combined["GAME_DATE_DT"] = pd.to_datetime(combined["GAME_DATE"])
+        combined["GAME_DATE_DT"] = pd.to_datetime(combined["GAME_DATE"], format="%b %d, %Y", errors="coerce").fillna(
+            pd.to_datetime(combined["GAME_DATE"], format="mixed", errors="coerce")
+        )
         combined["GAME_DATE"] = combined["GAME_DATE_DT"].dt.strftime("%m/%d")
         combined = combined.drop_duplicates(subset=["GAME_ID"]) if "GAME_ID" in combined.columns else combined
         return combined.sort_values("GAME_DATE_DT", ascending=False).reset_index(drop=True)
