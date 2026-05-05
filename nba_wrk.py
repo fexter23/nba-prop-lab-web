@@ -2,7 +2,7 @@ import streamlit as st
 import json
 from nba_api.stats.static import players
 from nba_api.stats.static import teams as static_teams
-from nba_api.stats.endpoints import leaguedashplayerstats, leaguedashteamstats, PlayerGameLog, scoreboardv2
+from nba_api.stats.endpoints import leaguedashplayerstats, leaguedashteamstats, PlayerGameLog, scoreboardv3
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -124,27 +124,44 @@ today_str = date.today().strftime("%Y-%m-%d")
 @st.cache_data(ttl=300)
 def get_todays_games(game_date: str):
     try:
-        sb = scoreboardv2.ScoreboardV2(game_date=game_date, league_id="00", day_offset=0)
-        game_header_df = sb.game_header.get_data_frame()
-        if game_header_df.empty: return [], 0
-        game_header_df = game_header_df.drop_duplicates(subset=['GAME_ID'])
+        sb = scoreboardv3.ScoreboardV3(game_date=game_date, league_id="00")
+        header_df    = sb.game_header.get_data_frame()
+        line_score_df = sb.line_score.get_data_frame()
+
+        if header_df.empty:
+            return [], 0
+
+        # line_score has 2 rows per game (away first, home second) with teamTricode
+        # Build a lookup: gameId -> [away_tricode, home_tricode]
+        team_by_game = {}
+        for _, row in line_score_df.iterrows():
+            gid = str(row['gameId'])
+            team_by_game.setdefault(gid, []).append(row['teamTricode'])
 
         games = []
-        for _, row in game_header_df.iterrows():
-            visitor_id = str(row['VISITOR_TEAM_ID'])
-            home_id    = str(row['HOME_TEAM_ID'])
-            # Detect game type from GAME_ID: '004' = playoffs, '005' = play-in, '002' = regular
-            game_id_str = str(row.get('GAME_ID', ''))
+        seen_ids = set()
+        for _, row in header_df.iterrows():
+            game_id_str = str(row['gameId'])
+            if game_id_str in seen_ids:
+                continue
+            seen_ids.add(game_id_str)
+
+            tricodes = team_by_game.get(game_id_str, ['???', '???'])
+            away_abbr = tricodes[0] if len(tricodes) > 0 else '???'
+            home_abbr = tricodes[1] if len(tricodes) > 1 else '???'
+            status    = row.get('gameStatusText', '')
+
             if game_id_str[3:5] == '04':
                 game_type = ' 🏆'
             elif game_id_str[3:5] == '05':
                 game_type = ' 🎟️'
             else:
                 game_type = ''
+
             games.append({
-                'away': team_abbr_map.get(visitor_id, '???'),
-                'home': team_abbr_map.get(home_id, '???'),
-                'status': row['GAME_STATUS_TEXT'],
+                'away': away_abbr,
+                'home': home_abbr,
+                'status': status,
                 'game_type': game_type,
             })
         return games, len(games)
