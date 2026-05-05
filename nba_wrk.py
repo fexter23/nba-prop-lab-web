@@ -735,6 +735,27 @@ with col_left:
                 unsafe_allow_html=True
             )
 
+            # Minutes Projection — right below the hit rate pill
+            recent_min_data = df.head(10)
+            if len(recent_min_data) >= 3:
+                x_min = np.arange(len(recent_min_data))
+                y_min = recent_min_data["MIN"].values
+                slope_min, _ = np.polyfit(x_min, y_min, 1)
+                recent_avg_min = recent_min_data["MIN"].mean()
+                projected_min = recent_avg_min + slope_min
+                min_color = '#00ff88' if projected_min >= 32 else '#ffcc00' if projected_min >= 28 else '#ff5555'
+                concern_min = "🟢 Solid" if projected_min >= 32 else "🟡 Some concern" if projected_min >= 28 else "🔴 High risk"
+                arrow_min = "↑" if slope_min > 0.3 else "↓" if slope_min < -0.3 else "→"
+                st.markdown(
+                    f"<div style='background:#1e1e2e;padding:8px 10px;border-radius:8px;margin:-4px 0 8px 0;font-size:0.88em;'>"
+                    f"<b>Proj. MIN:</b> <span style='color:{min_color};font-weight:700'>≈ {projected_min:.1f}</span>"
+                    f" &nbsp;|&nbsp; <b>Avg L10:</b> {recent_avg_min:.1f}"
+                    f" &nbsp;|&nbsp; <b>Trend:</b> <span style='color:{min_color}'>{arrow_min} {slope_min:+.1f}</span>"
+                    f" &nbsp;|&nbsp; {concern_min}"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
             if len(pdata) > 0:
                 n = min(10, len(pdata))
                 recent_data = pdata.head(n)
@@ -763,23 +784,6 @@ with col_left:
                     yaxis=dict(title=stat, tickfont=dict(size=10), title_font=dict(size=11)),
                 )
                 st.plotly_chart(fig, use_container_width=True)
-
-    # Minutes Projection
-    recent_min = df.head(10)
-    if len(recent_min) >= 3:
-        x_min = np.arange(len(recent_min))
-        y_min = recent_min["MIN"].values
-        slope_min, intercept_min = np.polyfit(x_min, y_min, 1)
-        recent_avg_min = recent_min["MIN"].mean()
-        projected_min = recent_avg_min + slope_min
-
-        concern_min = "🟢 Solid" if projected_min >= 32 else "🟡 Some concern" if projected_min >= 28 else "🔴 High risk"
-        arrow_min = "↑" if slope_min > 0.3 else "↓" if slope_min < -0.3 else "→"
-
-        st.markdown(
-            f"**Projected Minutes**: ≈ **{projected_min:.1f}** | "
-            f"**Avg (L10)**: **{recent_avg_min:.1f}** ({arrow_min} {slope_min:.1f}) — **{concern_min}**"
-        )
 
 with col_right:
     if opponent and df is not None and not df.empty:
