@@ -691,172 +691,194 @@ opponent = get_opponent_from_game(selected_game_label, player_team)
 
 st.markdown("---")
 
-# Hit rate display + charts (your existing code)
-if lines:
-    pdata = df.sort_values("GAME_DATE_DT", ascending=False).copy()
-    
-    for stat, line in lines.items():
-        windows = [5, 10]
-        windows = [w for w in windows if len(pdata) >= w]
-        
-        over_list = []
-        for w in windows:
-            recent_w = pdata.head(w)
-            hit_pct = (recent_w[stat] > line).mean() * 100
-            over_list.append(hit_pct)
-        
-        parts = []
-        for pct in over_list:
-            color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
-            parts.append(f"<span style='color:{color}'>{pct:.0f}%</span>")
-        
-        hit_str = " | ".join(parts)
-        avg_o = np.mean(over_list)
-        avg_u = 100 - avg_o
-        avg_color_o = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
-        avg_color_u = '#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555'
-        
-        avg_text = f" AVG: <span style=\'color:{avg_color_o}\'>O {avg_o:.0f}%</span> / <span style=\'color:{avg_color_u}\'>U {avg_u:.0f}%</span>"
-        
-        # Defensive rank badge for this stat vs today's opponent
-        badge_html = ""
-        if opponent:
-            badge_html = get_def_rank_badge(opponent, stat, def_rankings)
-            if badge_html:
-                badge_html = f" &nbsp;{badge_html}"
-        
+# ── Two-column layout: Hit Rate + Charts (left) | VS Opponent Log (right) ───────
+col_left, col_right = st.columns([11, 9], gap="large")
+
+with col_left:
+    st.markdown("#### 📈 Hit Rate & Recent Games")
+
+    if lines:
+        pdata = df.sort_values("GAME_DATE_DT", ascending=False).copy()
+
+        for stat, line in lines.items():
+            windows = [5, 10]
+            windows = [w for w in windows if len(pdata) >= w]
+
+            over_list = []
+            for w in windows:
+                recent_w = pdata.head(w)
+                hit_pct = (recent_w[stat] > line).mean() * 100
+                over_list.append(hit_pct)
+
+            parts = []
+            for pct in over_list:
+                color = '#00ff88' if pct > 73 else '#ffcc00' if pct >= 60 else '#ff5555'
+                parts.append(f"<span style='color:{color}'>{pct:.0f}%</span>")
+
+            hit_str = " | ".join(parts)
+            avg_o = np.mean(over_list)
+            avg_u = 100 - avg_o
+            avg_color_o = '#00ff88' if avg_o > 75 else '#ffcc00' if avg_o >= 61 else '#ff5555'
+            avg_color_u = '#00ff88' if avg_u > 75 else '#ffcc00' if avg_u >= 61 else '#ff5555'
+
+            avg_text = f" AVG: <span style='color:{avg_color_o}'>O {avg_o:.0f}%</span> / <span style='color:{avg_color_u}'>U {avg_u:.0f}%</span>"
+
+            badge_html = ""
+            if opponent:
+                badge_html = get_def_rank_badge(opponent, stat, def_rankings)
+                if badge_html:
+                    badge_html = f" &nbsp;{badge_html}"
+
+            st.markdown(
+                f"<div style='background:#1e1e2e;padding:10px;border-radius:8px;margin:8px 0;'>"
+                f"<strong>{stat} {line}</strong> {hit_str}{avg_text}{badge_html}</div>",
+                unsafe_allow_html=True
+            )
+
+            if len(pdata) > 0:
+                n = min(10, len(pdata))
+                recent_data = pdata.head(n)
+                fig = go.Figure()
+                colors = ["#00ff88" if v > line else "#ff4444" for v in recent_data[stat]]
+                text_colors = ["#000" if val > 10 else "#fff" for val in recent_data[stat]]
+
+                fig.add_trace(go.Bar(
+                    x=recent_data["GAME_DATE"],
+                    y=recent_data[stat],
+                    marker_color=colors,
+                    text=recent_data[stat].round(1),
+                    textposition="inside",
+                    textfont={"color": text_colors, "size": 11}
+                ))
+                fig.add_hline(y=line, line_dash="dash", line_color="#00ffff",
+                              annotation_text=f"line = {line}", annotation_position="top right",
+                              annotation_font_size=11)
+
+                fig.update_layout(
+                    height=220,
+                    margin=dict(t=25, b=30, l=30, r=15),
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                    font_color="#00e0ff",
+                    xaxis=dict(title=None, tickfont=dict(size=10)),
+                    yaxis=dict(title=stat, tickfont=dict(size=10), title_font=dict(size=11)),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+    # Minutes Projection
+    recent_min = df.head(10)
+    if len(recent_min) >= 3:
+        x_min = np.arange(len(recent_min))
+        y_min = recent_min["MIN"].values
+        slope_min, intercept_min = np.polyfit(x_min, y_min, 1)
+        recent_avg_min = recent_min["MIN"].mean()
+        projected_min = recent_avg_min + slope_min
+
+        concern_min = "🟢 Solid" if projected_min >= 32 else "🟡 Some concern" if projected_min >= 28 else "🔴 High risk"
+        arrow_min = "↑" if slope_min > 0.3 else "↓" if slope_min < -0.3 else "→"
+
         st.markdown(
-            f"<div style=\'background:#1e1e2e;padding:10px;border-radius:8px;margin:8px 0;\'>"
-            f"<strong>{stat} {line}</strong>\u2003{hit_str}{avg_text}{badge_html}</div>",
-            unsafe_allow_html=True
+            f"**Projected Minutes**: ≈ **{projected_min:.1f}** | "
+            f"**Avg (L10)**: **{recent_avg_min:.1f}** ({arrow_min} {slope_min:.1f}) — **{concern_min}**"
         )
 
-        if len(pdata) > 0:
-            n = min(10, len(pdata))
-            recent_data = pdata.head(n)
-            fig = go.Figure()
-            colors = ["#00ff88" if v > line else "#ff4444" for v in recent_data[stat]]
-            text_colors = ["#000" if val > 10 else "#fff" for val in recent_data[stat]]
-            
-            fig.add_trace(go.Bar(
-                x=recent_data["GAME_DATE"],
-                y=recent_data[stat],
-                marker_color=colors,
-                text=recent_data[stat].round(1),
-                textposition="inside",
-                textfont={"color": text_colors}
-            ))
-            fig.add_hline(y=line, line_dash="dash", line_color="#00ffff",
-                          annotation_text=f"line = {line}", annotation_position="top right")
-            
-            fig.update_layout(
-                height=320, margin=dict(t=50, b=40, l=20, r=20),
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                font_color="#00e0ff", xaxis_title="Game Date", yaxis_title=stat
-            )
-            st.plotly_chart(fig, use_container_width=True)
+with col_right:
+    if opponent and df is not None and not df.empty:
+        def_badge = ""
+        if selected_stat and selected_stat != "— Select stat —":
+            def_badge = get_def_rank_badge(opponent, selected_stat, def_rankings)
 
-# Minutes Projection
-recent_min = df.head(10)
-if len(recent_min) >= 3:
-    x_min = np.arange(len(recent_min))
-    y_min = recent_min["MIN"].values
-    slope_min, intercept_min = np.polyfit(x_min, y_min, 1)
-    recent_avg_min = recent_min["MIN"].mean()
-    projected_min = recent_avg_min + slope_min
+        st.markdown(f"#### 📊 vs {opponent} — {CURRENT_SEASON}")
+        if def_badge:
+            st.markdown(f"**{opponent} Defense** — {selected_stat}: {def_badge}", unsafe_allow_html=True)
 
-    concern_min = "🟢 Solid" if projected_min >= 32 else "🟡 Some concern" if projected_min >= 28 else "🔴 High risk"
-    arrow_min = "↑" if slope_min > 0.3 else "↓" if slope_min < -0.3 else "→"
-    
-    st.markdown(f"**Projected Minutes**: ≈ **{projected_min:.1f}** | "
-                f"**Avg (L10)**: **{recent_avg_min:.1f}** ({arrow_min} {slope_min:.1f}) — **{concern_min}**")
+        current_season_games = df[df['SEASON_ID'].str.contains(CURRENT_SEASON.split('-')[0], na=False)].copy()
+        vs_opp = current_season_games[
+            current_season_games['MATCHUP'].str.contains(opponent, na=False)
+        ].copy()
 
-# ====================== NEW: VS OPPONENT GAME LOG ======================
-
-if opponent and df is not None and not df.empty:
-    st.markdown("---")
-    # Defensive rank badge for the selected stat vs this opponent
-    def_badge = ""
-    if selected_stat and selected_stat != "— Select stat —":
-        def_badge = get_def_rank_badge(opponent, selected_stat, def_rankings)
-    st.subheader(f"📊 **{selected_player} vs {opponent}** — {CURRENT_SEASON}")
-    if def_badge:
-        st.markdown(f"**{opponent} Defense** — {selected_stat}: {def_badge}", unsafe_allow_html=True)
-    
-    # Filter to current season
-    current_season_games = df[df['SEASON_ID'].str.contains(CURRENT_SEASON.split('-')[0], na=False)].copy()
-    
-    vs_opp = current_season_games[
-        current_season_games['MATCHUP'].str.contains(opponent, na=False)
-    ].copy()
-    
-    if not vs_opp.empty:
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
+        if not vs_opp.empty:
             games_vs = len(vs_opp)
             avg_pts = vs_opp["PTS"].mean()
             avg_reb = vs_opp["REB"].mean()
             avg_ast = vs_opp["AST"].mean()
             avg_min = vs_opp["MIN"].mean()
-            
-            st.markdown(f"""
-            **Games**: {games_vs} | **MIN**: {avg_min:.1f} | **PTS**: {avg_pts:.1f} | **REB**: {avg_reb:.1f} | **AST**: {avg_ast:.1f}
-            """)
-        
-        with col2:
+
+            # Hit rate inline with averages
+            hr_html = ""
             if selected_stat and selected_stat in lines:
-                line = lines[selected_stat]
-                hit_rate_vs = (vs_opp[selected_stat] > line).mean() * 100
-                color = '#00ff88' if hit_rate_vs > 65 else '#ffcc00' if hit_rate_vs >= 50 else '#ff5555'
-                st.markdown(f"**Hit Rate vs {opponent}**: <span style='color:{color}; font-size:1.2em;'><b>{hit_rate_vs:.0f}%</b></span>", 
-                           unsafe_allow_html=True)
-        
-        # Shooting % vs opponent
-        shoot_parts = []
-        if "FGM" in vs_opp.columns and "FGA" in vs_opp.columns and vs_opp["FGA"].sum() > 0:
-            fg3m_sum = vs_opp["FG3M"].sum() if "FG3M" in vs_opp.columns else 0
-            fg3a_sum = vs_opp["FG3A"].sum() if "FG3A" in vs_opp.columns else 0
-            fg2m = vs_opp["FGM"].sum() - fg3m_sum
-            fg2a = vs_opp["FGA"].sum() - fg3a_sum
-            if fg2a > 0:
-                shoot_parts.append(f"**2P%**: {fg2m/fg2a*100:.1f}% ({fg2m:.0f}/{fg2a:.0f})")
-        if "FG3M" in vs_opp.columns and "FG3A" in vs_opp.columns and vs_opp["FG3A"].sum() > 0:
-            fg3m = vs_opp["FG3M"].sum()
-            fg3a = vs_opp["FG3A"].sum()
-            shoot_parts.append(f"**3P%**: {fg3m/fg3a*100:.1f}% ({fg3m:.0f}/{fg3a:.0f})")
-        if "FTM" in vs_opp.columns and "FTA" in vs_opp.columns and vs_opp["FTA"].sum() > 0:
-            ftm = vs_opp["FTM"].sum()
-            fta = vs_opp["FTA"].sum()
-            shoot_parts.append(f"**FT%**: {ftm/fta*100:.1f}% ({ftm:.0f}/{fta:.0f})")
-        if shoot_parts:
-            st.markdown(" | ".join(shoot_parts))
+                _line = lines[selected_stat]
+                hit_rate_vs = (vs_opp[selected_stat] > _line).mean() * 100
+                hr_color = '#00ff88' if hit_rate_vs > 65 else '#ffcc00' if hit_rate_vs >= 50 else '#ff5555'
+                hr_html = (
+                    f" &nbsp;|&nbsp; <b>Hit Rate</b> ({selected_stat} {_line}): "
+                    f"<span style='color:{hr_color};font-size:1.1em;font-weight:700'>{hit_rate_vs:.0f}%</span>"
+                )
 
-        # Compute combo stats for display
-        vs_opp_disp = vs_opp.copy()
-        for col, a, b in [("Pts+Reb", "PTS", "REB"), ("Pts+Ast", "PTS", "AST"),
-                          ("Ast+Reb", "AST", "REB"), ("Stl+Blk", "STL", "BLK")]:
-            if a in vs_opp_disp.columns and b in vs_opp_disp.columns:
-                vs_opp_disp[col] = vs_opp_disp[a] + vs_opp_disp[b]
-        if all(c in vs_opp_disp.columns for c in ["PTS", "REB", "AST"]):
-            vs_opp_disp["PRA"] = vs_opp_disp["PTS"] + vs_opp_disp["REB"] + vs_opp_disp["AST"]
+            st.markdown(
+                f"<div style='background:#1e1e2e;padding:8px 10px;border-radius:8px;margin:4px 0 8px 0;font-size:0.88em;'>"
+                f"<b>G:</b> {games_vs} &nbsp;|&nbsp; <b>MIN:</b> {avg_min:.1f} &nbsp;|&nbsp; "
+                f"<b>PTS:</b> {avg_pts:.1f} &nbsp;|&nbsp; <b>REB:</b> {avg_reb:.1f} &nbsp;|&nbsp; <b>AST:</b> {avg_ast:.1f}"
+                f"{hr_html}"
+                f"</div>",
+                unsafe_allow_html=True
+            )
 
-        # Table
-        display_cols_vs = ["GAME_DATE", "GAME_TYPE", "MATCHUP", "WL", "MIN",
-                           "PTS", "REB", "AST", "STL", "BLK", "TOV",
-                           "Pts+Reb", "Pts+Ast", "Ast+Reb", "Stl+Blk", "PRA",
-                           "FG3M", "FG3A", "+/-"]
-        available_vs = [c for c in display_cols_vs if c in vs_opp_disp.columns]
-        
-        styled_vs = vs_opp_disp[available_vs].style\
-            .format(precision=1)\
-            .map(lambda val: 'background-color: #00cc88; color: black' if pd.notna(val) and val >= 32 else '', 
-                 subset=['MIN'] if 'MIN' in available_vs else [])
-        
-        st.dataframe(styled_vs, use_container_width=True, hide_index=True)
-        
+            # Shooting % — same pill style as the averages row
+            shoot_items = []
+            if "FGM" in vs_opp.columns and "FGA" in vs_opp.columns and vs_opp["FGA"].sum() > 0:
+                fg3m_sum = vs_opp["FG3M"].sum() if "FG3M" in vs_opp.columns else 0
+                fg3a_sum = vs_opp["FG3A"].sum() if "FG3A" in vs_opp.columns else 0
+                fg2m = vs_opp["FGM"].sum() - fg3m_sum
+                fg2a = vs_opp["FGA"].sum() - fg3a_sum
+                if fg2a > 0:
+                    pct_2p = fg2m / fg2a * 100
+                    c2 = '#00ff88' if pct_2p >= 50 else '#ffcc00' if pct_2p >= 42 else '#ff5555'
+                    shoot_items.append(f"<b>2P%:</b> <span style='color:{c2};font-weight:700'>{pct_2p:.1f}%</span>")
+            if "FG3M" in vs_opp.columns and "FG3A" in vs_opp.columns and vs_opp["FG3A"].sum() > 0:
+                fg3m = vs_opp["FG3M"].sum()
+                fg3a = vs_opp["FG3A"].sum()
+                pct_3p = fg3m / fg3a * 100
+                c3 = '#00ff88' if pct_3p >= 37 else '#ffcc00' if pct_3p >= 32 else '#ff5555'
+                shoot_items.append(f"<b>3P%:</b> <span style='color:{c3};font-weight:700'>{pct_3p:.1f}%</span>")
+            if "FTM" in vs_opp.columns and "FTA" in vs_opp.columns and vs_opp["FTA"].sum() > 0:
+                ftm = vs_opp["FTM"].sum()
+                fta = vs_opp["FTA"].sum()
+                pct_ft = ftm / fta * 100
+                cft = '#00ff88' if pct_ft >= 80 else '#ffcc00' if pct_ft >= 70 else '#ff5555'
+                shoot_items.append(f"<b>FT%:</b> <span style='color:{cft};font-weight:700'>{pct_ft:.1f}%</span>")
+            if shoot_items:
+                st.markdown(
+                    f"<div style='background:#1e1e2e;padding:8px 10px;border-radius:8px;margin:4px 0 8px 0;font-size:0.88em;'>"
+                    + " &nbsp;|&nbsp; ".join(shoot_items)
+                    + "</div>",
+                    unsafe_allow_html=True
+                )
+
+            vs_opp_disp = vs_opp.copy()
+            for _col, a, b in [("Pts+Reb", "PTS", "REB"), ("Pts+Ast", "PTS", "AST"),
+                                ("Ast+Reb", "AST", "REB"), ("Stl+Blk", "STL", "BLK")]:
+                if a in vs_opp_disp.columns and b in vs_opp_disp.columns:
+                    vs_opp_disp[_col] = vs_opp_disp[a] + vs_opp_disp[b]
+            if all(c in vs_opp_disp.columns for c in ["PTS", "REB", "AST"]):
+                vs_opp_disp["PRA"] = vs_opp_disp["PTS"] + vs_opp_disp["REB"] + vs_opp_disp["AST"]
+
+            display_cols_vs = ["GAME_DATE", "WL", "MIN", "PTS", "REB", "AST",
+                                "STL", "BLK", "TOV", "FG3M", "PRA", "+/-"]
+            available_vs = [c for c in display_cols_vs if c in vs_opp_disp.columns]
+
+            styled_vs = vs_opp_disp[available_vs].style\
+                .format(precision=1)\
+                .map(lambda val: 'background-color: #00cc88; color: black' if pd.notna(val) and val >= 32 else '',
+                     subset=['MIN'] if 'MIN' in available_vs else [])
+
+            st.dataframe(styled_vs, use_container_width=True, hide_index=True, height=320)
+
+        else:
+            st.info(f"No games vs **{opponent}** in {CURRENT_SEASON} yet.")
     else:
-        st.info(f"No games against **{opponent}** in {CURRENT_SEASON} yet.")
+        st.markdown("#### 📊 vs Opponent")
+        st.caption("Select a game filter in the sidebar to see matchup history.")
+
 
 # ── Full Recent Game Log ────────────────────────────────────────────────────────
 with st.expander("📊 Full Recent Game Log (Last 15)", expanded=False):
