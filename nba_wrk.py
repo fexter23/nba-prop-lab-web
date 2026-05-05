@@ -1,5 +1,6 @@
 import streamlit as st
 import json
+import base64
 from nba_api.stats.static import players
 from nba_api.stats.static import teams as static_teams
 from nba_api.stats.endpoints import leaguedashplayerstats, leaguedashteamstats, PlayerGameLog, scoreboardv3
@@ -26,9 +27,43 @@ CURRENT_SEASON = get_current_season()
 current_year = int(CURRENT_SEASON.split('-')[0])
 PREVIOUS_SEASON = f"{current_year - 1}-{str(current_year)[-2:]}"
 
+# ── Board persistence helpers ────────────────────────────────────────────────────
+def _board_to_qp(board: list) -> str:
+    """Serialize board → base64 string safe for a query param."""
+    data = []
+    for entry in board:
+        item = entry.copy()
+        if isinstance(item.get('timestamp'), datetime):
+            item['timestamp'] = item['timestamp'].isoformat()
+        data.append(item)
+    return base64.urlsafe_b64encode(json.dumps(data).encode()).decode()
+
+def _qp_to_board(qp_val: str) -> list:
+    """Deserialize base64 query param → board list."""
+    try:
+        data = json.loads(base64.urlsafe_b64decode(qp_val.encode()).decode())
+        for entry in data:
+            if isinstance(entry.get('timestamp'), str):
+                try:
+                    entry['timestamp'] = datetime.fromisoformat(entry['timestamp'])
+                except Exception:
+                    pass
+        return data
+    except Exception:
+        return []
+
+def _save_board():
+    """Write current board into query params (called after every mutation)."""
+    if st.session_state.my_board:
+        st.query_params['board'] = _board_to_qp(st.session_state.my_board)
+    else:
+        st.query_params.pop('board', None)
+
 # ── Session state ───────────────────────────────────────────────────────────────
 if 'my_board' not in st.session_state:
-    st.session_state.my_board = []
+    # Restore from query params on first load
+    qp_board = st.query_params.get('board', '')
+    st.session_state.my_board = _qp_to_board(qp_board) if qp_board else []
 if 'filter_teams' not in st.session_state:
     st.session_state.filter_teams = None
 if 'pending_load' not in st.session_state:
@@ -306,7 +341,7 @@ odds_options = ["", "-300", "-275", "-250","-245","-240","-235","-230", "-225", 
                 "-215","-210","-205","-200", "-195","-190", "-185","-180","-175", "-170",
                 "-165","-160", "-155", "-150", "-145", "-140", "-135", "-130", "-125",
                 "-120", "-115", "-112" ,"-110", "-105", "-100", "+100", "+102", "+105",
-                "+110", "+115", "+118", "+120", "+122", "+125", "+130", "+132","+135", "+140", "+145",
+                "+110", "+115", "+118", "+120", "+122", "+125", "+130", "+135", "+140", "+145",
                 "+150", "+155", "+160", "+165", "+170", "+175", "+180", "+185", "+190",
                 "+195", "+200", "+210", "+220", "+230", "+240", "+250", "+275", "+300"]
 
@@ -469,6 +504,7 @@ if (selected_player and selected_stat and selected_stat != "— Select stat —"
         for e in st.session_state.my_board
     ):
         st.session_state.my_board.append(entry)
+        _save_board()
         st.toast(f"Pinned → {selected_player} • {selected_stat} {line}", icon="📌")
         st.rerun()
 
@@ -572,11 +608,13 @@ div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
                         if not is_first:
                             if st.button("↑", key=f"up_{entry['player']}_{entry['stat']}_{entry['line']}_{i}", help="Move up"):
                                 _move_prop(entry['player'], entry['stat'], entry['line'], -1)
+                                _save_board()
                                 st.rerun()
                     with btn_cols[1]:
                         if not is_last:
                             if st.button("↓", key=f"dn_{entry['player']}_{entry['stat']}_{entry['line']}_{i}", help="Move down"):
                                 _move_prop(entry['player'], entry['stat'], entry['line'], +1)
+                                _save_board()
                                 st.rerun()
                     with btn_cols[2]:
                         if st.button("🔍 Load", key=f"load_{entry['player']}_{entry['stat']}_{str(entry.get('timestamp',''))}", help="Load this prop", use_container_width=True):
@@ -595,6 +633,7 @@ div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
                                         d['stat']   == entry['stat']   and
                                         d['line']   == entry['line'])
                             ]
+                            _save_board()
                             st.rerun()
 
         with col_right:
@@ -603,6 +642,7 @@ div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
                     d for d in st.session_state.my_board
                     if d['matchup'] != match
                 ]
+                _save_board()
                 st.rerun()
 else:
     st.sidebar.caption("No props saved. Pin some above!")
@@ -634,6 +674,7 @@ if uploaded_file is not None:
             if isinstance(entry.get('timestamp'), str):
                 entry['timestamp'] = datetime.fromisoformat(entry['timestamp'])
         st.session_state.my_board = data
+        _save_board()
         st.sidebar.success("Board restored successfully!")
         st.rerun()
     except Exception as e:
